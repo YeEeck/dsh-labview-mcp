@@ -1,17 +1,25 @@
 {
   "name": "dsh-labview-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Unofficial DSH bundle for Zuehlke's LabVIEW MCP server",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./index.js",
-    "./locale/*.json": "./locale/*.json"
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
     "cordis.patch.yml",
-    "locale/*.json"
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "LICENSE-Zuehlke.txt",
+    "LICENSE-pylabview.txt",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "optionalDependencies": {
     "dsh-labview-mcp-win32-x64": "~3.1.0"

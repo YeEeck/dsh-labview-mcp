@@ -51,9 +51,11 @@ Get-Process LabVIEWMCP -ErrorAction SilentlyContinue        # 应无输出
 
 Agent 会话中调用 `plugin_manager`：
 - `action: install_bundle`
-- `target: D:\Code\dsh-proj\dsh-labview-mcp\dist\dsh-labview-mcp-0.1.0-local.tgz`（本地 E2E 构建；正式安装用 registry 上的 `dsh-labview-mcp`）
+- `target: D:\Code\dsh-proj\dsh-labview-mcp\dist\dsh-labview-mcp-1.0.0-local.tgz`（本地 E2E 构建；正式安装用 registry 上的 `dsh-labview-mcp`）
 
-期望结果：`application: applied`、`bundle: dsh-labview-mcp`、`version: 0.1.0`，且 `plugin_manager list_bundles` 显示 `installed: true`、`enabled: true`。
+期望结果：`application: applied`、`bundle: dsh-labview-mcp`、`version: 1.0.0`，且 `plugin_manager list_bundles` 显示 `installed: true`、`enabled: true`。
+
+> **内部 0.1.0 证据：** ticket 05 的完整 E2E（安装 → 供给 → 注册 → 122 工具 → 卸载）是在内部版本 `0.1.0` 上完成的。`1.0.0` 只增加展示元数据（locale、`docs/DETAIL*`、icon、licenses）并提升版本号，运行时、供给与注册逻辑未变；ticket 07 用最终 `1.0.0` 本地 tarball 复验安装和 `labview_mcp_status`。
 
 若返回第 0 节的 ENOENT 诊断：重启 DSH Desktop（Host），再检查 `labview_mcp_status`。如果为了当前会话临时把 v2 包文件复制到了 `local-bundles\dsh-labview-mcp`，验证后必须删除该副本（第 4 步已给出命令）。
 
@@ -161,7 +163,7 @@ pnpm --dir $profileDir install
 
 **运行时注意事项**：如果已经执行第 5 步，`current` 已被删除，回滚还需要重新获取 v1 运行时 v3.0.4：release 资产 `labview-mcp.zip`，64,632,488 字节，SHA-256 `d834ea73e31e8ffea3cd5d83bf91dfb08947945f93ea4a7c2814b1bbd9956b8e`，解压到 `%USERPROFILE%\.dsh\tools\labview-mcp\current`。`Update-LabVIEWMCP.ps1` 只安装最新 release，不能直接锁定 v3.0.4，因此若还需要回滚能力，请在删除 `current` 前自行保留一份外部副本。
 
-重启后检查 `plugin_manager list_bundles` 中 `dsh-labview-mcp` 为 v1.0.0，且 `LabVIEWMCP.exe` 从 `current\bin` 启动。
+重启后检查 `plugin_manager list_bundles` 中 `dsh-labview-mcp` 为 v1 bundle（其 `package.json` 版本是 `1.0.0`），且 `LabVIEWMCP.exe` 从 `current\bin` 启动。
 
 ## 附：本地 E2E tarball 的构建方式
 
@@ -176,7 +178,7 @@ Copy-Item -Path 'packages\dsh-labview-mcp\*' -Destination $tmp -Recurse
 Push-Location $tmp
 npm pack
 Pop-Location
-Move-Item "$tmp\dsh-labview-mcp-0.1.0.tgz" 'D:\Code\dsh-proj\dsh-labview-mcp\dist\dsh-labview-mcp-0.1.0-local.tgz' -Force
+Move-Item "$tmp\dsh-labview-mcp-1.0.0.tgz" 'D:\Code\dsh-proj\dsh-labview-mcp\dist\dsh-labview-mcp-1.0.0-local.tgz' -Force
 ```
 
 不要修改仓库内 `packages/dsh-labview-mcp/package.json` 的 `optionalDependencies`（它应保持 `~3.1.0`）。

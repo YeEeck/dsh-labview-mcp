@@ -83,7 +83,19 @@ const BINARY_REQUIRED_ENTRIES = Object.freeze([
   'THIRD-PARTY-NOTICES.md',
 ])
 const BINARY_REQUIRED_PATTERNS = Object.freeze([/^runtime\//])
-const PLUGIN_REQUIRED_ENTRIES = Object.freeze(['index.js', 'cordis.patch.yml'])
+const PLUGIN_REQUIRED_ENTRIES = Object.freeze([
+  'index.js',
+  'cordis.patch.yml',
+  'icon.svg',
+  'README.md',
+  'LICENSE',
+  'LICENSE-Zuehlke.txt',
+  'LICENSE-pylabview.txt',
+  'THIRD-PARTY-NOTICES.md',
+  'docs/DETAIL.md',
+  'docs/DETAIL.zh.md',
+  'docs/preview.svg',
+])
 const PLUGIN_REQUIRED_PATTERNS = Object.freeze([/^locale\/[^/]+\.json$/])
 
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/

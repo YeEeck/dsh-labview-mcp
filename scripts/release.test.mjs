@@ -231,7 +231,7 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   assert.equal(summary.ok, true)
   assert.equal(summary.release.tag, 'v3.1.0')
   assert.equal(summary.binary.version, '3.1.0')
-  assert.equal(summary.plugin.version, '0.1.0')
+  assert.equal(summary.plugin.version, '1.0.0')
   assert.equal(summary.plugin.packageName, 'dsh-labview-mcp')
   assert.equal(summary.expectedFileCount, fixture.fileCount)
   assert.equal(summary.downloads.zip.source, 'local')
@@ -242,7 +242,7 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   assert.ok(summary.binary.tarballBytes > 0)
   assert.ok(summary.plugin.tarballBytes > 0)
   assert.match(path.basename(summary.binary.tarballPath), /^dsh-labview-mcp-win32-x64-3\.1\.0\.tgz$/)
-  assert.match(path.basename(summary.plugin.tarballPath), /^dsh-labview-mcp-0\.1\.0\.tgz$/)
+  assert.match(path.basename(summary.plugin.tarballPath), /^dsh-labview-mcp-1\.0\.0\.tgz$/)
 
   const binaryEntries = await listTarballEntries(summary.binary.tarballPath)
   for (const required of [
@@ -271,13 +271,35 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   }
 
   const pluginEntries = await listTarballEntries(summary.plugin.tarballPath)
-  assert.ok(pluginEntries.includes('index.js'))
-  assert.ok(pluginEntries.includes('cordis.patch.yml'))
+  for (const required of [
+    'index.js',
+    'cordis.patch.yml',
+    'icon.svg',
+    'README.md',
+    'LICENSE',
+    'LICENSE-Zuehlke.txt',
+    'LICENSE-pylabview.txt',
+    'THIRD-PARTY-NOTICES.md',
+    'docs/DETAIL.md',
+    'docs/DETAIL.zh.md',
+    'docs/preview.svg',
+  ]) {
+    assert.ok(pluginEntries.includes(required), `plugin tarball is missing ${required}`)
+  }
   assert.ok(pluginEntries.some((entry) => /^locale\/.+\.json$/.test(entry)))
 
   const pluginPublishedPaths = summary.plugin.publishDryRun.files.map((file) => file.path)
-  assert.ok(pluginPublishedPaths.includes('index.js'))
-  assert.ok(pluginPublishedPaths.includes('cordis.patch.yml'))
+  for (const required of [
+    'index.js',
+    'cordis.patch.yml',
+    'icon.svg',
+    'README.md',
+    'docs/DETAIL.md',
+    'docs/DETAIL.zh.md',
+    'docs/preview.svg',
+  ]) {
+    assert.ok(pluginPublishedPaths.includes(required), `plugin dry-run is missing ${required}`)
+  }
   assert.ok(pluginPublishedPaths.some((entry) => /^locale\/.+\.json$/.test(entry)))
 
   assert.equal(await exists(summary.reportPath), true)

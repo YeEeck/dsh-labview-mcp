@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "LabVIEW MCP (unofficial)",
-    "description": "An unofficial DSH bundle for Zuehlke's LabVIEW MCP server."
+    "description": "An unofficial DSH bundle for Zuehlke's LabVIEW MCP server. It installs the Windows x64 runtime on first use (about 57 MB download), then registers 122 LabVIEW MCP tools; expect about 65–75k tokens per request, and Windows x64 is required. Disable it in Plugins to remove the tools from new sessions. When mcp__labview__* tools are missing, check the native labview_mcp_status and labview_mcp_repair diagnostics first.",
+    "detail": "docs/DETAIL.md"
   }
 }
