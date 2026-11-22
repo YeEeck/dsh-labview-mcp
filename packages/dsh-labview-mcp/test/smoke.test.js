@@ -54,7 +54,9 @@ test('bundle manifest declares a patch and the patch file exists', async () => {
 
 test('package has no runtime dependencies, install scripts, or build step', () => {
   assert.equal(manifest.dependencies, undefined)
-  assert.equal(manifest.optionalDependencies, undefined)
+  assert.deepEqual(manifest.optionalDependencies, {
+    'dsh-labview-mcp-win32-x64': '~3.1.0',
+  })
   assert.equal(manifest.devDependencies, undefined)
   assert.equal(manifest.scripts, undefined)
 })
