@@ -34,6 +34,19 @@ function registerTools() {
   return ctx.registered
 }
 
+/**
+ * `apply` starts provisioning in the background. Wait until the service has
+ * left the transient `provisioning` state before asserting a settled status.
+ */
+async function settledStatus(statusTool) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const value = await statusTool.execute({}, {})
+    if (value.state !== 'provisioning') return value
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('status did not settle out of provisioning')
+}
+
 test('bundle manifest declares a patch and the patch file exists', async () => {
   assert.equal(manifest.dsh?.bundle?.patch, './cordis.patch.yml')
   await access(path.join(packageDir, manifest.dsh.bundle.patch))
@@ -57,7 +70,7 @@ test('apply registers exactly the two native diagnostic tools', () => {
 
 test('status tool reports state: missing', async () => {
   const statusTool = registerTools().find((tool) => tool.name === 'labview_mcp_status')
-  const value = await statusTool.execute({}, {})
+  const value = await settledStatus(statusTool)
 
   assert.equal(value.state, 'missing')
   assert.equal(value.platform, process.platform)
