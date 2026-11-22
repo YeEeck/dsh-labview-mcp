@@ -8,17 +8,45 @@ import { apply } from '../index.js'
 const packageDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(await readFile(path.join(packageDir, 'package.json'), 'utf8'))
 
-/** Minimal stand-in for the Host plugin context. */
+/** Minimal stand-in for the Host plugin context, including the injected MCP manager. */
 function fakeContext() {
   const registered = []
   const cleanups = []
+  const mcpServers = []
   return {
     registered,
     cleanups,
+    mcpServers,
     tools: {
       register(definition) {
         registered.push(definition)
         return () => {}
+      },
+    },
+    mcpManager: {
+      list() {
+        return mcpServers
+      },
+      register(name, _entry) {
+        const server = {
+          name,
+          configured: false,
+          status: { state: 'connected', toolCount: 0, connectedAt: Date.now() },
+        }
+        mcpServers.push(server)
+        return () => {
+          const index = mcpServers.indexOf(server)
+          if (index !== -1) mcpServers.splice(index, 1)
+        }
+      },
+      async probe(name) {
+        return {
+          ok: true,
+          serverInfo: { name, version: '3.1.0' },
+          toolNames: [],
+          truncated: false,
+          durationMs: 1,
+        }
       },
     },
     effect(setup) {

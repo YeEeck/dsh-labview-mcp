@@ -3,8 +3,9 @@
  *
  * `LabviewService` is the single test seam for the product. Production wiring
  * resolves the optional platform binary package and supplies a versioned tools
- * root under the user's DSH directory. This ticket implements provisioning
- * only; MCP registration is added by a later ticket.
+ * root under the user's DSH directory. After provisioning succeeds the service
+ * registers the `labview` MCP server with the injected manager, and the plugin
+ * lifetime effect owns that registration.
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -13,7 +14,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 
-export const inject = ['tools']
+export const inject = ['tools', 'mcpManager']
 
 const STATES = ['unsupported', 'missing', 'provisioning', 'ready', 'broken', 'conflict']
 
@@ -23,6 +24,66 @@ const SUPPORTED_ARCH = 'x64'
 const STAGING_PREFIX = '.staging-'
 const EXECUTABLE_RELATIVE_PATH = path.join('bin', 'LabVIEWMCP.exe')
 const VERSION_DIR_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$/
+
+const MCP_SERVER_NAME = 'labview'
+const DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000
+const MCP_STARTUP_TIMEOUT_MS = 120_000
+const DEFAULT_REGISTRATION_CLOSE_TIMEOUT_MS = 10_000
+const REGISTRATION_POLL_INTERVAL_MS = 50
+
+/** Message shown whenever another `labview` server owns the name. */
+const LABVIEW_CONFLICT_MESSAGE =
+  'a "labview" MCP server is already configured or registered by another source; remove that '
+  + 'server (for example the old dsh-labview-mcp v1 bundle) and run labview_mcp_repair so this '
+  + 'plugin can register its own "labview" server'
+
+/**
+ * Plugin config schema: Standard Schema V1, hand-rolled so the package keeps no
+ * runtime dependency. Only the per-tool-call timeout is user-tunable.
+ */
+export const Config = {
+  '~standard': {
+    version: 1,
+    vendor: 'dsh-labview-mcp',
+    validate(value) {
+      const raw = value === undefined ? {} : value
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { issues: [{ message: 'config must be an object' }] }
+      }
+
+      const unknownKeys = Object.keys(raw).filter((key) => key !== 'toolCallTimeoutMs')
+      if (unknownKeys.length > 0) {
+        return {
+          issues: unknownKeys.map((key) => ({
+            message: `unknown config option "${key}"`,
+            path: [key],
+          })),
+        }
+      }
+
+      const toolCallTimeoutMs = raw.toolCallTimeoutMs === undefined
+        ? DEFAULT_TOOL_CALL_TIMEOUT_MS
+        : raw.toolCallTimeoutMs
+      if (typeof toolCallTimeoutMs !== 'number'
+        || !Number.isFinite(toolCallTimeoutMs)
+        || toolCallTimeoutMs <= 0) {
+        return {
+          issues: [{
+            message: 'toolCallTimeoutMs must be a positive finite number',
+            path: ['toolCallTimeoutMs'],
+          }],
+        }
+      }
+
+      return { value: { toolCallTimeoutMs } }
+    },
+  },
+}
+
+/** Resolve after `milliseconds`, used for bounded registration polling. */
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
 
 const STATUS_DESCRIPTION =
   'Read-only diagnostic for the LabVIEW MCP runtime. This is the first place to look when '
@@ -188,19 +249,32 @@ export class LabviewService {
   #registrar
   #platform
   #arch
+  #toolCallTimeoutMs
+  #mcpStartupTimeoutMs
+  #registrationCloseTimeoutMs
   #inflight = null
   #provisioningInfo = null
   #activeVersionDir = null
   #lastError = undefined
+  #registration = null
+  #registrationPromise = null
+  #releasePromise = null
+  #releasing = false
+  #disposed = false
+  #repairTail = Promise.resolve()
+  #serverVersion = undefined
 
   /**
    * @param {object} options
    * @param {string|null} [options.binaryPackageRoot] installed platform binary package root.
    * @param {string} [options.toolsRoot] directory holding version subdirectories.
-   * @param {object} [options.registrar] MCP registration seam (used by a later ticket).
+   * @param {object|null} [options.registrar] MCP manager seam (`ctx.mcpManager` in production).
    * @param {string} [options.platform] defaults to `process.platform`.
    * @param {string} [options.arch] defaults to `process.arch`.
    * @param {string} [options.homeDir] defaults to `os.homedir()` when `toolsRoot` is omitted.
+   * @param {number} [options.toolCallTimeoutMs] per-tool-call timeout for the registered server.
+   * @param {number} [options.mcpStartupTimeoutMs] registration entry startup budget and connect wait.
+   * @param {number} [options.registrationCloseTimeoutMs] bounded wait for a disposed registration.
    */
   constructor({
     binaryPackageRoot = null,
@@ -209,13 +283,25 @@ export class LabviewService {
     platform = process.platform,
     arch = process.arch,
     homeDir,
+    toolCallTimeoutMs = DEFAULT_TOOL_CALL_TIMEOUT_MS,
+    mcpStartupTimeoutMs = MCP_STARTUP_TIMEOUT_MS,
+    registrationCloseTimeoutMs = DEFAULT_REGISTRATION_CLOSE_TIMEOUT_MS,
   } = {}) {
+    if (typeof toolCallTimeoutMs !== 'number'
+      || !Number.isFinite(toolCallTimeoutMs)
+      || toolCallTimeoutMs <= 0) {
+      throw new TypeError('toolCallTimeoutMs must be a positive finite number')
+    }
+
     const home = homeDir ?? os.homedir()
     this.#binaryPackageRoot = binaryPackageRoot ?? null
     this.#toolsRoot = toolsRoot ?? path.join(home, '.dsh', 'tools', 'labview-mcp')
     this.#registrar = registrar
     this.#platform = platform
     this.#arch = arch
+    this.#toolCallTimeoutMs = toolCallTimeoutMs
+    this.#mcpStartupTimeoutMs = mcpStartupTimeoutMs
+    this.#registrationCloseTimeoutMs = registrationCloseTimeoutMs
   }
 
   /** Whether this service can provision on the injected platform. */
@@ -311,12 +397,12 @@ export class LabviewService {
 
     try {
       if (await isFile(executablePath)) {
-        return {
+        return await this.#describeRegistration({
           state: 'ready',
           ...base,
           binaryVersion: info.version,
           toolsDir: versionDir,
-        }
+        })
       }
     } catch (error) {
       return {
@@ -366,20 +452,284 @@ export class LabviewService {
   }
 
   /**
-   * Re-run provisioning. `force: true` recopies even a healthy runtime.
+   * Re-run provisioning and replace the MCP registration. `force: true`
+   * recopies even a healthy runtime. Repeated calls are serialized and leave at
+   * most one live registration.
    * @param {{force?: boolean}} [options]
    * @returns {Promise<object>} a `LabviewStatus` payload.
    */
   repair(options = {}) {
-    return this.#startEnsure(options?.force === true)
+    const force = options?.force === true
+    const run = this.#repairTail.then(async () => {
+      if (this.#disposed) return this.status()
+      if (this.#inflight) await this.#inflight.catch(() => {})
+      if (this.#registrationPromise) await this.#registrationPromise.catch(() => {})
+      await this.#releaseRegistration()
+      this.#serverVersion = undefined
+      return this.#startEnsure(force)
+    })
+    this.#repairTail = run.then(() => undefined, () => undefined)
+    return run
   }
 
   /**
-   * Release resources owned by the service. The MCP registration seam arrives
-   * in a later ticket; this keeps the lifecycle contract stable meanwhile.
+   * Dispose the MCP registration and wait until the manager has withdrawn it.
+   * A disposed service never registers again.
    */
   async dispose() {
-    // No registration exists yet, so there is nothing to dispose.
+    this.#disposed = true
+    await this.#releaseRegistration()
+  }
+
+  /** The stdio registration entry for one provisioned runtime directory. */
+  #registrationEntry(versionDir) {
+    const binDirectory = path.join(versionDir, 'bin')
+    return {
+      transport: 'stdio',
+      command: path.join(binDirectory, 'LabVIEWMCP.exe'),
+      cwd: binDirectory,
+      toolCallTimeoutMs: this.#toolCallTimeoutMs,
+      startupTimeoutMs: this.#mcpStartupTimeoutMs,
+    }
+  }
+
+  /** Read `registrar.list()`, accepting a synchronous or promise-returning fake. */
+  async #listServers() {
+    const listed = await this.#registrar.list()
+    return Array.isArray(listed) ? listed : []
+  }
+
+  /** Find the live `labview` row in a manager list. */
+  #findLabview(list) {
+    return list.find((server) => server?.name === MCP_SERVER_NAME)
+  }
+
+  /**
+   * Decorate a ready runtime status with the live registration's health.
+   * Never probes: `serverVersion` is cached from registration time.
+   */
+  async #describeRegistration(base) {
+    if (!this.#registrar || typeof this.#registrar.list !== 'function') return base
+
+    let list
+    try {
+      list = await this.#listServers()
+    } catch (error) {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: `failed to read the MCP server list: ${errorMessage(error)}`,
+      }
+    }
+
+    const existing = this.#findLabview(list)
+    if (this.#registration === null) {
+      if (existing && !this.#releasing) {
+        return { ...base, state: 'conflict', lastError: LABVIEW_CONFLICT_MESSAGE }
+      }
+      return base
+    }
+
+    if (!existing) {
+      if (this.#releasing) return base
+      return {
+        ...base,
+        state: 'broken',
+        lastError: 'the "labview" MCP registration disappeared unexpectedly; run labview_mcp_repair to register it again',
+      }
+    }
+
+    const status = existing.status ?? {}
+    if (status.state === 'connected') {
+      return {
+        ...base,
+        ...(typeof status.toolCount === 'number' ? { toolCount: status.toolCount } : {}),
+        ...(this.#serverVersion === undefined ? {} : { serverVersion: this.#serverVersion }),
+      }
+    }
+    if (status.state === 'failed') {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: `MCP server "labview" failed (${status.reason ?? 'unknown'}): ${status.lastError ?? 'no diagnostic'}`,
+      }
+    }
+    if (status.state === 'closed') {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: 'MCP server "labview" closed before it became ready',
+      }
+    }
+    if (status.state === 'waiting-credentials') {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: `MCP server "labview" is waiting for credentials: ${status.lastError ?? 'no diagnostic'}`,
+      }
+    }
+    if (status.state === 'disabled') {
+      return { ...base, state: 'broken', lastError: 'the "labview" MCP server is disabled' }
+    }
+    return {
+      ...base,
+      lastError: status.lastError ?? `MCP server "labview" is ${status.state ?? 'connecting'}`,
+    }
+  }
+
+  /** Register once; concurrent ensure/repair calls share the in-flight attempt. */
+  #ensureRegistered(base) {
+    if (this.#registrationPromise) return this.#registrationPromise
+    const promise = this.#registerServer(base)
+    this.#registrationPromise = promise
+    const clear = () => {
+      if (this.#registrationPromise === promise) this.#registrationPromise = null
+    }
+    promise.then(clear, clear)
+    return promise
+  }
+
+  /** Perform the one registration for this service instance. */
+  async #registerServer(base) {
+    if (this.#disposed || !this.#registrar) return base
+    if (this.#registration !== null) return this.#describeRegistration(base)
+
+    let list
+    try {
+      list = await this.#listServers()
+    } catch (error) {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: `failed to read the MCP server list: ${errorMessage(error)}`,
+      }
+    }
+    if (this.#disposed) return base
+    if (this.#findLabview(list)) {
+      return { ...base, state: 'conflict', lastError: LABVIEW_CONFLICT_MESSAGE }
+    }
+
+    if (typeof this.#registrar.register !== 'function') {
+      return {
+        ...base,
+        state: 'broken',
+        lastError: 'the MCP manager does not expose register()',
+      }
+    }
+
+    let disposer
+    try {
+      disposer = this.#registrar.register(
+        MCP_SERVER_NAME,
+        this.#registrationEntry(base.toolsDir),
+      )
+    } catch (error) {
+      const message = errorMessage(error)
+      if (/already (?:configured|registered)|already exists/i.test(message)) {
+        return { ...base, state: 'conflict', lastError: `${LABVIEW_CONFLICT_MESSAGE} (${message})` }
+      }
+      return {
+        ...base,
+        state: 'broken',
+        lastError: `failed to register the "labview" MCP server: ${message}`,
+      }
+    }
+
+    this.#registration = typeof disposer === 'function' ? disposer : () => {}
+    this.#serverVersion = undefined
+    await this.#probeServerVersion()
+    if (this.#disposed) return base
+    return this.#waitForConnected(base)
+  }
+
+  /** Ask the manager to probe the server; the result is cached for status. */
+  async #probeServerVersion() {
+    if (!this.#registrar || typeof this.#registrar.probe !== 'function') return
+    try {
+      const result = await this.#registrar.probe(MCP_SERVER_NAME)
+      if (result?.ok === true && typeof result.serverInfo?.version === 'string') {
+        this.#serverVersion = result.serverInfo.version
+      }
+    } catch {
+      // A failed probe only omits `serverVersion`; registration health stays authoritative.
+    }
+  }
+
+  /** Wait (bounded) for the registered server to report connected. */
+  async #waitForConnected(base) {
+    const deadline = Date.now() + this.#mcpStartupTimeoutMs
+    while (true) {
+      if (this.#disposed) return base
+      const described = await this.#describeRegistration(base)
+      if (described.state === 'broken' || described.state === 'conflict') return described
+      if (typeof described.toolCount === 'number') return described
+      if (Date.now() >= deadline) {
+        return {
+          ...described,
+          lastError: described.lastError
+            ?? `MCP server "labview" did not report connected within ${this.#mcpStartupTimeoutMs} ms`,
+        }
+      }
+      await delay(Math.min(REGISTRATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())))
+    }
+  }
+
+  /** Decorate a provisioned-ready status with registration state. */
+  async #afterProvisionReady(status) {
+    if (!this.#registrar || this.#disposed) return status
+    try {
+      return await this.#ensureRegistered(status)
+    } catch (error) {
+      return { ...status, state: 'broken', lastError: errorMessage(error) }
+    }
+  }
+
+  /** Dispose the live registration, bounded by `registrationCloseTimeoutMs`. */
+  #releaseRegistration() {
+    if (this.#releasePromise) return this.#releasePromise
+    const registration = this.#registration
+    if (registration === null) return Promise.resolve()
+
+    this.#registration = null
+    this.#releasing = true
+    const promise = (async () => {
+      try {
+        await registration()
+      } catch (error) {
+        this.#lastError = `failed to dispose the MCP registration: ${errorMessage(error)}`
+      }
+      await this.#waitForWithdrawal()
+    })().finally(() => {
+      this.#releasing = false
+    })
+    this.#releasePromise = promise
+    const clear = () => {
+      if (this.#releasePromise === promise) this.#releasePromise = null
+    }
+    promise.then(clear, clear)
+    return promise
+  }
+
+  /** Poll `registrar.list()` until our registration is gone or the budget expires. */
+  async #waitForWithdrawal() {
+    if (!this.#registrar || typeof this.#registrar.list !== 'function') return true
+    const deadline = Date.now() + this.#registrationCloseTimeoutMs
+    while (true) {
+      let list = []
+      try {
+        list = await this.#listServers()
+      } catch {
+        // A transient list failure is not proof of a withdrawn registration.
+      }
+      if (!this.#findLabview(list)) return true
+      if (Date.now() >= deadline) {
+        this.#lastError =
+          `timed out after ${this.#registrationCloseTimeoutMs} ms waiting for the "labview" `
+          + 'MCP registration to be withdrawn'
+        return false
+      }
+      await delay(Math.min(REGISTRATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())))
+    }
   }
 
   /** Start or join the single in-flight provisioning pass. */
@@ -425,12 +775,12 @@ export class LabviewService {
       if (!force && await isFile(executablePath)) {
         this.#activeVersionDir = versionDir
         this.#lastError = undefined
-        return {
+        return await this.#afterProvisionReady({
           state: 'ready',
           ...base,
           binaryVersion: info.version,
           toolsDir: versionDir,
-        }
+        })
       }
 
       await mkdir(this.#toolsRoot, { recursive: true })
@@ -469,12 +819,12 @@ export class LabviewService {
       this.#lastError = undefined
       await this.#pruneVersions()
 
-      return {
+      return await this.#afterProvisionReady({
         state: 'ready',
         ...base,
         binaryVersion: info.version,
         toolsDir: versionDir,
-      }
+      })
     } catch (error) {
       const message = errorMessage(error)
       this.#lastError = message
@@ -590,17 +940,20 @@ const statusOutput = {
 
 /**
  * Register the native diagnostic tools and start provisioning in the
- * background for the lifetime of the plugin fiber.
- * @param {object} ctx - Host plugin context carrying the `tools` service and `effect`.
- * @param {object} _config - plugin row config.
+ * background for the lifetime of the plugin fiber. Provisioning success also
+ * registers the `labview` MCP server with the injected manager.
+ * @param {object} ctx - Host plugin context carrying `tools`, `mcpManager`, and `effect`.
+ * @param {object} [config] - validated plugin row config.
  */
-export function apply(ctx, _config) {
+export function apply(ctx, config) {
   const service = new LabviewService({
     binaryPackageRoot: resolveBinaryPackageRoot(),
     toolsRoot: path.join(os.homedir(), '.dsh', 'tools', 'labview-mcp'),
+    registrar: ctx.mcpManager ?? null,
     platform: process.platform,
     arch: process.arch,
     homeDir: os.homedir(),
+    toolCallTimeoutMs: config?.toolCallTimeoutMs ?? DEFAULT_TOOL_CALL_TIMEOUT_MS,
   })
 
   const statusTool = {
