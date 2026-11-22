@@ -153,6 +153,24 @@ toolsDir: C:\Users\PC\.dsh\tools\labview-mcp\3.1.0
 
 `cordis_inspect_query Tool.listTools`: 180 total tools; exactly 122 tools whose names start with `mcp__labview__` (122 unique); `labview_mcp_status` and `labview_mcp_repair` present; no duplicates, errors, or retries. A repeat inspect after the final cleanup again counted 122 `mcp__labview__` tools plus the two native diagnostics.
 
+### Post-review reinstall (fixed code)
+
+After the code-review fix commit `2c399e0` (status states, atomic repair, retention, builder checks, optional manifest, publish cooldown), the plugin was rebuilt and reinstalled over the same 1.0.0 profile dependency using the local-wired tarball `dist/dsh-labview-mcp-1.0.0-local.tgz` (15 entries, 20,200 bytes; the normal publishable tarball `dist/dsh-labview-mcp-1.0.0.tgz` is 20,181 bytes). The same stale-loader workaround was used (temporary `local-bundles` copy + `set_bundle` off/on), then the temporary copy was removed.
+
+Final fresh-session evidence with the fixed code:
+
+```
+state: ready
+platform: win32
+arch: x64
+binaryVersion: 3.1.0
+serverVersion: 0.1.0
+toolCount: 122
+toolsDir: C:\Users\PC\.dsh\tools\labview-mcp\3.1.0
+```
+
+`mcp__labview__pylv_status`: `ok: true`, `serverVersion: "3.1.0 (022142ad)"`, `aixmlBackend.pylabviewAvailable: true`, `exportCache.state: warm` (853/853), `grpcService.reachable: false` (normal). `cordis_inspect_query Tool.listTools`: exactly 122 unique `mcp__labview__*` names plus `labview_mcp_status` and `labview_mcp_repair` (180 total tools). `LabVIEWMCP.exe` runs from `...\3.1.0\bin\LabVIEWMCP.exe`. The installed `node_modules\dsh-labview-mcp` is version 1.0.0 with the fixed `index.js`; a Host restart loads it directly from `node_modules` without the temporary copy.
+
 ### Browser / Plugins-page verification caveat
 
 No browser control is available from this shell. Client inspect (`cordis_inspect_query` platform `client`, `Service.listService`) timed out after 10,000 ms with "Open or reconnect the Harness page, then retry", so the rendered Plugins card, the detail page's preview image, light/dark appearance, and live English/Chinese copy switching remain **visually unverified**. What is verified: `locale/en.json` and `locale/zh.json` contain the required `meta.title`/`meta.description`/`meta.detail`; both declared detail documents exist and each is one image line; `docs/preview.svg` and `icon.svg` are valid, dimension-correct, text-free self-contained SVGs; all of these files are inside the packed and installed package; and `plugin_manager list_bundles` reports the bundle version/description/source. Also note the current Host was activated through the stale-loader workaround, so a restart is needed for it to load the package from `node_modules` directly (the profile dependency and bundle entry already point at the installed 1.0.0 package).
