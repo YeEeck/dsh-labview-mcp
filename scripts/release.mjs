@@ -5,9 +5,11 @@
  * One run:
  *   1. resolves the latest upstream release from the GitHub API (or a fixture
  *      release JSON passed with `--release-json`),
- *   2. downloads `labview-mcp.zip` and `labview-mcp.manifest.sha256` through the
- *      mirror order GitHub -> ghfast.top -> gh-proxy.com -> ghproxy.net,
- *      verifying every candidate against the API size and `sha256:` digest,
+ *   2. downloads `labview-mcp.zip` through the mirror order GitHub ->
+ *      ghfast.top -> gh-proxy.com -> ghproxy.net, verifying every candidate
+ *      against the API size and `sha256:` digest; an optional
+ *      `labview-mcp.manifest.sha256` asset is verified the same way, otherwise
+ *      the builder generates a manifest from the extracted runtime,
  *   3. builds the `dsh-labview-mcp-win32-x64` package (version = upstream tag)
  *      through `buildBinaryPackage()`,
  *   4. packs the `dsh-labview-mcp` plugin package at its own independent
@@ -16,6 +18,8 @@
  *      published file lists, and writes a full report under `<out>/`.
  *
  * Actual publishing is opt-in with `--publish binary` or `--publish plugin`.
+ * Before `--publish plugin` the script checks npm and refuses until the binary
+ * package version is 24 hours old; `--skip-publish-cooldown` overrides it.
  * `NPM_TOKEN` is read from the environment only; it is never written into the
  * repository, package metadata, logs, or a command line.
  *
@@ -73,6 +77,9 @@ export const DEFAULT_MIRRORS = Object.freeze([
 export const DEFAULT_ZIP_TIMEOUT_MS = 10 * 60 * 1000
 export const DEFAULT_MANIFEST_TIMEOUT_MS = 2 * 60 * 1000
 export const DEFAULT_API_TIMEOUT_MS = 60 * 1000
+export const DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org'
+export const BINARY_PACKAGE_NAME = 'dsh-labview-mcp-win32-x64'
+export const PLUGIN_PUBLISH_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
 const BINARY_PACKAGE_DIRECTORY_NAME = 'dsh-labview-mcp-win32-x64'
 const BINARY_REQUIRED_ENTRIES = Object.freeze([
@@ -94,6 +101,7 @@ const PLUGIN_REQUIRED_ENTRIES = Object.freeze([
   'THIRD-PARTY-NOTICES.md',
   'docs/DETAIL.md',
   'docs/DETAIL.zh.md',
+  'docs/migration-v1-to-v2.md',
   'docs/preview.svg',
 ])
 const PLUGIN_REQUIRED_PATTERNS = Object.freeze([/^locale\/[^/]+\.json$/])
@@ -256,8 +264,7 @@ export function parseReleaseMetadata(document) {
     throw new Error('release JSON has no assets array')
   }
 
-  const parseAsset = (name) => {
-    const asset = document.assets.find((candidate) => candidate?.name === name)
+  const parseAsset = (name, asset) => {
     if (!asset) throw new Error(`release JSON has no asset named ${name}`)
     const digest = typeof asset.digest === 'string' ? asset.digest.trim() : ''
     const digestMatch = DIGEST_PATTERN.exec(digest)
@@ -282,12 +289,18 @@ export function parseReleaseMetadata(document) {
     }
   }
 
+  const findAsset = (name) => document.assets.find((candidate) => candidate?.name === name)
+  const zipSource = findAsset(ZIP_ASSET_NAME)
+  if (!zipSource) throw new Error(`release JSON has no asset named ${ZIP_ASSET_NAME}`)
+  const manifestSource = findAsset(MANIFEST_ASSET_NAME)
+
   return {
     tag,
     version,
-    assets: document.assets,
-    zipAsset: parseAsset(ZIP_ASSET_NAME),
-    manifestAsset: parseAsset(MANIFEST_ASSET_NAME),
+    zipAsset: parseAsset(ZIP_ASSET_NAME, zipSource),
+    // The manifest asset is optional: the spec only mandates the zip and its
+    // API digest. When absent, the builder generates one from the runtime.
+    manifestAsset: manifestSource ? parseAsset(MANIFEST_ASSET_NAME, manifestSource) : null,
   }
 }
 
@@ -676,14 +689,111 @@ function summarizePublishReport(report) {
 }
 
 /**
+ * Refuse a plugin publish until the binary package version has been on npm for
+ * at least 24 hours (pnpm's default `minimumReleaseAge` is 1440 minutes).
+ *
+ * Pure apart from the injected `fetchImpl`: tests pass a fixed `now()` and a
+ * fake registry response.
+ *
+ * @param {object} options
+ * @param {string} [options.packageName] binary package name.
+ * @param {string} options.version binary package version (= upstream version).
+ * @param {string} [options.registryUrl] npm registry base URL.
+ * @param {number} [options.now] current epoch milliseconds.
+ * @param {Function} [options.fetchImpl] fetch implementation.
+ * @param {number} [options.minimumAgeMs] required publish age.
+ * @returns {Promise<{packageName: string, version: string, publishedAt: string, ageMs: number, minimumAgeMs: number}>}
+ */
+export async function checkPublishCooldown({
+  packageName = BINARY_PACKAGE_NAME,
+  version,
+  registryUrl = DEFAULT_REGISTRY_URL,
+  now = Date.now(),
+  fetchImpl = globalThis.fetch,
+  minimumAgeMs = PLUGIN_PUBLISH_COOLDOWN_MS,
+} = {}) {
+  if (typeof version !== 'string' || !version) {
+    throw new Error('checkPublishCooldown requires the binary package version')
+  }
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('global fetch is not available; Node.js 18 or newer is required')
+  }
+  const metadataUrl = `${registryUrl.replace(/\/$/, '')}/${encodeURIComponent(packageName)}`
+  let response
+  try {
+    response = await fetchImpl(metadataUrl, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'dsh-labview-mcp-release-script',
+      },
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch (error) {
+    throw new Error(`could not read npm registry metadata for ${packageName}: ${errorMessage(error)}`)
+  }
+  if (response.status === 404) {
+    throw new Error(
+      `refusing to publish the plugin: binary package ${packageName}@${version} is not on npm yet; `
+      + 'publish the binary package first and wait 24 hours',
+    )
+  }
+  if (!response.ok) {
+    throw new Error(`npm registry returned HTTP ${response.status} for ${packageName}`)
+  }
+  let metadata
+  try {
+    metadata = await response.json()
+  } catch {
+    throw new Error(`npm registry returned malformed JSON for ${packageName}`)
+  }
+  const publishedAtText = metadata?.time?.[version]
+  if (typeof publishedAtText !== 'string') {
+    throw new Error(
+      `refusing to publish the plugin: npm has no publish time for ${packageName}@${version}; `
+      + 'publish the binary package first and wait 24 hours',
+    )
+  }
+  const publishedAt = Date.parse(publishedAtText)
+  if (!Number.isFinite(publishedAt)) {
+    throw new Error(
+      `refusing to publish the plugin: npm publish time for ${packageName}@${version} is invalid: ${publishedAtText}`,
+    )
+  }
+  const ageMs = now - publishedAt
+  if (ageMs < 0) {
+    throw new Error(
+      `refusing to publish the plugin: the publish time of ${packageName}@${version} is in the future`,
+    )
+  }
+  if (ageMs < minimumAgeMs) {
+    const remainingMinutes = Math.ceil((minimumAgeMs - ageMs) / 60_000)
+    throw new Error(
+      `refusing to publish the plugin: ${packageName}@${version} has been on npm for less than `
+      + `24 hours (${remainingMinutes} minutes remaining); wait for the cooldown or pass `
+      + '--skip-publish-cooldown',
+    )
+  }
+  return {
+    packageName,
+    version,
+    publishedAt: new Date(publishedAt).toISOString(),
+    ageMs,
+    minimumAgeMs,
+  }
+}
+
+/**
  * Run one complete release.
  *
  * @param {object} [options]
  * @param {string} [options.releaseJsonPath] offline release metadata fixture.
- * @param {string} [options.archivePath] offline release zip (requires manifestPath).
+ * @param {string} [options.archivePath] offline release zip.
  * @param {string} [options.manifestPath] offline manifest asset (requires archivePath).
  * @param {string} [options.outDir] output directory (default `<repo>/dist`).
  * @param {'dry-run'|'binary'|'plugin'} [options.publishMode] `binary`/`plugin` publish for real.
+ * @param {boolean} [options.skipPublishCooldown] bypass the plugin publish cooldown.
+ * @param {string} [options.registryUrl] npm registry URL used for the cooldown check.
+ * @param {number} [options.now] current epoch milliseconds (tests).
  * @param {string} [options.repositoryRoot] repository root used for plugin package resolution.
  * @param {string} [options.pluginPackageDirectory] plugin package directory.
  * @param {string} [options.apiUrl] GitHub API URL.
@@ -701,6 +811,9 @@ export async function runRelease({
   manifestPath,
   outDir = DEFAULT_OUT_DIRECTORY,
   publishMode = 'dry-run',
+  skipPublishCooldown = false,
+  registryUrl = DEFAULT_REGISTRY_URL,
+  now = Date.now(),
   repositoryRoot = REPOSITORY_ROOT,
   pluginPackageDirectory = path.join(repositoryRoot, 'packages', 'dsh-labview-mcp'),
   apiUrl = DEFAULT_API_URL,
@@ -719,8 +832,8 @@ export async function runRelease({
       `NPM_TOKEN is required for --publish ${publishMode}; set it in the environment only`,
     )
   }
-  if (Boolean(archivePath) !== Boolean(manifestPath)) {
-    throw new Error('--archive and --manifest must be supplied together')
+  if (manifestPath && !archivePath) {
+    throw new Error('--manifest requires --archive')
   }
   if ((archivePath || manifestPath) && !releaseJsonPath) {
     throw new Error('--archive/--manifest require --release-json so the tag and API digests are known')
@@ -731,38 +844,65 @@ export async function runRelease({
     ? await readReleaseMetadataFile(releaseJsonPath)
     : await fetchLatestRelease({ apiUrl, fetchImpl, timeoutMs: apiTimeoutMs })
 
+  if (archivePath && !manifestPath && release.manifestAsset) {
+    throw new Error(
+      '--manifest is required with --archive because the release JSON declares '
+      + `${MANIFEST_ASSET_NAME}`,
+    )
+  }
+  if (manifestPath && !release.manifestAsset) {
+    throw new Error(
+      `--manifest was supplied but the release JSON has no ${MANIFEST_ASSET_NAME} asset `
+      + 'to verify it against; omit --manifest and let the builder generate one',
+    )
+  }
+
+  let publishCooldown = null
+  if (publishMode === 'plugin' && !skipPublishCooldown) {
+    publishCooldown = await checkPublishCooldown({
+      version: release.version,
+      registryUrl,
+      now,
+      fetchImpl,
+    })
+  }
+
   const downloadDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-labview-mcp-release-'))
   let stagingDirectory = null
   try {
-    // ---- 1. Obtain and verify the two assets -----------------------------
-    let manifestDownload
+    // ---- 1. Obtain and verify the assets (the manifest is optional) ------
+    let manifestDownload = null
     let zipDownload
-    let resolvedManifestPath
+    let resolvedManifestPath = null
     let resolvedArchivePath
 
     if (archivePath) {
       resolvedArchivePath = path.resolve(archivePath)
-      resolvedManifestPath = path.resolve(manifestPath)
       zipDownload = await verifyLocalAsset({
         filePath: resolvedArchivePath,
         asset: release.zipAsset,
         label: 'release zip',
       })
-      manifestDownload = await verifyLocalAsset({
-        filePath: resolvedManifestPath,
-        asset: release.manifestAsset,
-        label: 'release manifest',
-      })
+      if (manifestPath) {
+        resolvedManifestPath = path.resolve(manifestPath)
+        manifestDownload = await verifyLocalAsset({
+          filePath: resolvedManifestPath,
+          asset: release.manifestAsset,
+          label: 'release manifest',
+        })
+      }
     } else {
-      resolvedManifestPath = path.join(downloadDirectory, MANIFEST_ASSET_NAME)
-      manifestDownload = await downloadVerifiedAsset({
-        asset: release.manifestAsset,
-        destinationPath: resolvedManifestPath,
-        mirrors,
-        timeoutMs: manifestTimeoutMs,
-        fetchImpl,
-        label: 'release manifest',
-      })
+      if (release.manifestAsset) {
+        resolvedManifestPath = path.join(downloadDirectory, MANIFEST_ASSET_NAME)
+        manifestDownload = await downloadVerifiedAsset({
+          asset: release.manifestAsset,
+          destinationPath: resolvedManifestPath,
+          mirrors,
+          timeoutMs: manifestTimeoutMs,
+          fetchImpl,
+          label: 'release manifest',
+        })
+      }
       resolvedArchivePath = path.join(downloadDirectory, ZIP_ASSET_NAME)
       zipDownload = await downloadVerifiedAsset({
         asset: release.zipAsset,
@@ -774,7 +914,9 @@ export async function runRelease({
       })
     }
 
-    const expectedFileCount = await countManifestEntries(resolvedManifestPath)
+    const expectedFileCount = resolvedManifestPath === null
+      ? null
+      : await countManifestEntries(resolvedManifestPath)
 
     // ---- 2. Build the binary package and pack the plugin in staging ------
     await mkdir(resolvedOutDir, { recursive: true })
@@ -791,6 +933,7 @@ export async function runRelease({
       expectedSha256: release.zipAsset.sha256,
       expectedSize: release.zipAsset.size,
       manifestPath: resolvedManifestPath,
+      generateManifest: resolvedManifestPath === null,
       expectedFileCount,
       pack: true,
       packDestination: stagingDirectory,
@@ -871,15 +1014,17 @@ export async function runRelease({
       },
       downloads: {
         zip: summarizeDownload(zipDownload),
-        manifest: summarizeDownload(manifestDownload),
+        manifest: manifestDownload ? summarizeDownload(manifestDownload) : null,
       },
       expectedFileCount,
+      publishCooldown,
       binary: {
         packageName: binaryBuild.packageName,
         version: binaryBuild.version,
         packageDirectory: finalBinaryPackageDirectory,
         runtimeFileCount: binaryBuild.runtimeFileCount,
         manifestEntryCount: binaryBuild.manifestEntryCount,
+        manifestGenerated: binaryBuild.manifestGenerated,
         runtimeBytes: binaryBuild.runtimeBytes,
         tarballPath: finalBinaryTarball,
         tarballBytes: binaryBuild.tarballBytes,
@@ -919,6 +1064,7 @@ Options:
   --manifest <path>           Offline: use this manifest asset (required with --archive)
   --out <dir>                 Output directory (default: ${DEFAULT_OUT_DIRECTORY})
   --publish <binary|plugin>   Actually publish that package (default: dry-run both)
+  --skip-publish-cooldown     Bypass the 24-hour plugin publish cooldown
   --zip-timeout-ms <ms>       Per-mirror zip timeout (default: ${DEFAULT_ZIP_TIMEOUT_MS})
   --manifest-timeout-ms <ms>  Per-mirror manifest timeout (default: ${DEFAULT_MANIFEST_TIMEOUT_MS})
   --api-timeout-ms <ms>       GitHub API timeout (default: ${DEFAULT_API_TIMEOUT_MS})
@@ -943,6 +1089,10 @@ function parseArguments(argv) {
     const argument = argv[index]
     if (argument === '--help' || argument === '-h') {
       options.help = true
+      continue
+    }
+    if (argument === '--skip-publish-cooldown') {
+      options.skipPublishCooldown = true
       continue
     }
     const [flag, inlineValue] = argument.includes('=')
@@ -985,6 +1135,7 @@ function compactSummary(summary) {
     release: summary.release,
     downloads: summary.downloads,
     expectedFileCount: summary.expectedFileCount,
+    publishCooldown: summary.publishCooldown,
     binary: {
       packageName: summary.binary.packageName,
       version: summary.binary.version,

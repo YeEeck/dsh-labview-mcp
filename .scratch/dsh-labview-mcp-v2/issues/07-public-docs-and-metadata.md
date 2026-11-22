@@ -4,7 +4,7 @@
 
 **Blocked by:** 05, 06
 
-**Status:** done
+**Status:** resolved
 
 - [x] 插件标题为 `LabVIEW MCP (unofficial)`；描述明确说明是 Zuehlke LabVIEW MCP 的非官方 DSH bundle。
 - [x] `locale/en.json` 和 `locale/zh.json` 覆盖 `meta.title`、`meta.description`、`meta.detail`，英文使用 sentence case。
@@ -18,6 +18,13 @@
 ## Comments
 
 Implemented on `feat/v2-implementation` (ticket 07 only).
+
+### Review corrections (2026-11-23)
+
+- The Plugins card, detail page, preview rendering, and live English/Chinese locale switching could **not** be visually inspected: no browser control was available and client inspect timed out. The checklist item is supported only by file/package-level evidence (locale JSON, SVG validation, packed file lists), not by a rendered view.
+- `icon.svg` uses a 36×36 `viewBox` per DSH's artwork guide and renders at the 32×32 icon row size; the ticket's "32×32" wording was imprecise.
+- The full v1 → v2 migration checklist now ships inside the package as `docs/migration-v1-to-v2.md`; the README links it relatively. Final `npm pack --dry-run` / `npm publish --dry-run` report **15 entries**, 20,181 bytes packed, 64,675 bytes unpacked.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

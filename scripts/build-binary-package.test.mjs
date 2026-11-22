@@ -88,9 +88,17 @@ async function collectFiles(root) {
  * @param {object} [options]
  * @param {boolean} [options.wrap] put the tree under one wrapping directory.
  * @param {boolean} [options.tamperManifest] corrupt the executable digest.
+ * @param {boolean} [options.writeManifest] write the manifest beside the zip.
+ * @param {string[]} [options.omitDirectories] remove every file under these directories.
  * @param {Record<string,string>} [options.extraFiles] extra files written after the manifest.
  */
-async function createFixture({ wrap = false, tamperManifest = false, extraFiles = {} } = {}) {
+async function createFixture({
+  wrap = false,
+  tamperManifest = false,
+  writeManifest = true,
+  omitDirectories = [],
+  extraFiles = {},
+} = {}) {
   const root = await makeTemporaryDirectory()
   const releaseDirectory = path.join(root, 'release')
   const files = {
@@ -98,10 +106,19 @@ async function createFixture({ wrap = false, tamperManifest = false, extraFiles 
     'bin/LabVIEWMCP.exe': 'fixture executable\n',
     'bin/pylabview/app/LICENSE-pylabview.txt': 'pylabview fixture license\n',
     'bin/scripts/check.py': 'print("fixture")\n',
+    'bin/docs/guide.md': '# fixture guide\n',
     'agents/one.md': '# fixture agent\n',
     'hooks/hooks.json': '{}\n',
     '.mcp.json': '{"mcpServers":{}}\n',
     '.claude-plugin/plugin.json': '{"name":"fixture"}\n',
+  }
+
+  for (const omitDirectory of omitDirectories) {
+    for (const relativePath of Object.keys(files)) {
+      if (relativePath === omitDirectory || relativePath.startsWith(`${omitDirectory}/`)) {
+        delete files[relativePath]
+      }
+    }
   }
 
   for (const [relativePath, content] of Object.entries(files)) {
@@ -117,7 +134,9 @@ async function createFixture({ wrap = false, tamperManifest = false, extraFiles 
     manifestLines.push(`${digest}  ${relativePath}`)
   }
   const manifestText = `${manifestLines.join('\n')}\n`
-  await writeFile(path.join(root, 'manifest.sha256'), manifestText)
+  if (writeManifest) {
+    await writeFile(path.join(root, 'manifest.sha256'), manifestText)
+  }
 
   for (const [relativePath, content] of Object.entries(extraFiles)) {
     const targetPath = path.join(releaseDirectory, ...relativePath.split('/'))
@@ -186,9 +205,12 @@ test('a good fixture zip builds a complete binary package', async () => {
   assert.equal(summary.outDir, outDir)
   assert.equal(summary.runtimeFileCount, fixture.fileCount)
   assert.equal(summary.manifestEntryCount, fixture.fileCount)
+  assert.equal(summary.manifestGenerated, false)
 
   await access(path.join(outDir, 'runtime', 'bin', 'LabVIEWMCP.exe'))
   await access(path.join(outDir, 'runtime', 'bin', 'pylabview', 'app', 'LICENSE-pylabview.txt'))
+  await access(path.join(outDir, 'runtime', 'bin', 'scripts', 'check.py'))
+  await access(path.join(outDir, 'runtime', 'bin', 'docs', 'guide.md'))
   await access(path.join(outDir, 'runtime', 'agents', 'one.md'))
   await access(path.join(outDir, 'runtime', '.mcp.json'))
   await access(path.join(outDir, 'VERSION.txt'))
@@ -332,6 +354,44 @@ test('a runtime file count that differs from the expected count refuses the buil
     /runtime file count/i,
   )
   assert.equal(await exists(outDir), false)
+})
+
+test('a release tree without bin/docs is refused', async () => {
+  const fixture = await createFixture({ omitDirectories: ['bin/docs'] })
+  const outDir = path.join(fixture.root, 'dist', 'missing-docs')
+
+  await assert.rejects(
+    buildBinaryPackage({
+      zipPath: fixture.zipPath,
+      version: '3.1.0',
+      outDir,
+      expectedFileCount: fixture.fileCount,
+      pack: false,
+    }),
+    /missing required directory bin\/docs/i,
+  )
+  assert.equal(await exists(outDir), false)
+})
+
+test('a release without a manifest can generate one', async () => {
+  const fixture = await createFixture({ writeManifest: false })
+  const outDir = path.join(fixture.root, 'dist', 'generated-manifest')
+
+  const summary = await buildBinaryPackage({
+    zipPath: fixture.zipPath,
+    version: '3.1.0',
+    outDir,
+    generateManifest: true,
+    expectedFileCount: fixture.fileCount,
+    pack: false,
+  })
+
+  assert.equal(summary.manifestGenerated, true)
+  assert.equal(summary.runtimeFileCount, fixture.fileCount)
+  assert.equal(summary.manifestEntryCount, fixture.fileCount)
+  const generated = await readFile(path.join(outDir, 'labview-mcp.manifest.sha256'), 'utf8')
+  assert.match(generated, /^[0-9a-f]{64} {2}bin\/LabVIEWMCP\.exe$/m)
+  assert.equal(generated.trimEnd().split('\n').length, fixture.fileCount)
 })
 
 test('the default output directory lives under the repository dist folder', () => {

@@ -1,7 +1,7 @@
 # dsh-labview-mcp
 
 An **unofficial** DSH bundle for [Zuehlke's LabVIEW MCP server](https://github.com/Zuehlke/labview-mcp).
-It installs the LabVIEW MCP runtime for Windows x64 and registers it as the MCP
+It provisions the LabVIEW MCP runtime for Windows x64 and registers it as the MCP
 server `labview`, so new DSH sessions get `mcp__labview__*` tools without any
 manual download or profile editing. This project is not affiliated with or
 endorsed by NI or Zuehlke.
@@ -93,8 +93,7 @@ look when `mcp__labview__*` tools are absent or failing.
 The v1 local bundle cannot coexist with v2 because both register the MCP server
 name `labview`. The full backup, remove, install, verify, uninstall, and
 rollback procedure is in
-[v1 → v2 migration and rollback](../../docs/migration-v1-to-v2.md) (in the
-project repository). In short: back up the v1 bundle, remove it with Plugins,
+[v1 → v2 migration and rollback](docs/migration-v1-to-v2.md). In short: back up the v1 bundle, remove it with Plugins,
 install `dsh-labview-mcp` 1.0.0, verify `labview_mcp_status` reports `ready`
 with 122 tools in a new session, then delete the old
 `%USERPROFILE%\.dsh\tools\labview-mcp\current` directory. Keep the v1 backup
@@ -117,7 +116,9 @@ packages:
   SHA-256 before extraction. It then builds both packages and runs
   `npm publish --dry-run` file-list checks.
 - Release order: publish the binary package first, wait **24 hours**, then
-  publish the plugin. Hold the public announcement until the plugin version is
+  publish the plugin. The script enforces this by checking the binary version's
+  npm publish time before `--publish plugin`; `--skip-publish-cooldown` is the
+  explicit override. Hold the public announcement until the plugin version is
   at least 24 hours old, so pnpm's default `minimumReleaseAge` of 1440 minutes
   does not make the first-day install fail.
 - Publishing reads `NPM_TOKEN` from the environment only. The token is never

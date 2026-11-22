@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** done
+**Status:** resolved
 
 - [x] 二进制包版本为 `3.1.0`，声明 `"os": ["win32"]` 和 `"cpu": ["x64"]`。
 - [x] 包内包含完整的上游 release 运行树（`bin/LabVIEWMCP.exe`、`bin/pylabview/`、`bin/scripts/`、`bin/docs/`）、`VERSION.txt`、`labview-mcp.manifest.sha256`、`LICENSE` 和 `THIRD-PARTY-NOTICES.md`。
@@ -16,6 +16,11 @@
 ## Comments
 
 Implemented on `feat/v2-implementation`.
+
+### Review corrections (2026-11-23)
+
+- The builder now also requires the shipped runtime directories `bin/pylabview/`, `bin/scripts/`, and `bin/docs/` (not only `bin/LabVIEWMCP.exe` and `VERSION.txt`), so a manifest-consistent zip with a stripped runtime is refused. Fixtures cover the good tree and a missing `bin/docs`.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

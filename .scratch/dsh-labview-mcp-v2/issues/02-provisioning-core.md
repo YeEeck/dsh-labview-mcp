@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** done
+**Status:** resolved
 
 - [x] `LabviewService` 提供 `status()` / `ensure()` / `repair()` / `dispose()`，可由测试注入 `toolsRoot`、`binaryPackageRoot`、`platform` 和 `arch`。
 - [x] 供给先写 `.staging-<guid>`，成功后再原子 rename 为 `<binaryVersion>/`；半成品不会被报告为 `ready`。
@@ -16,6 +16,14 @@
 ## Comments
 
 Implemented on `feat/v2-implementation`.
+
+### Review corrections (2026-11-23)
+
+- Force repair is now atomic: the new copy is staged and verified before the old version directory is renamed aside, then the stage is swapped in and the backup removed; a failed copy/manifest check leaves the previous healthy runtime intact.
+- `#pruneVersions()` also runs on the already-ready path, so a profile with three old version directories is pruned even when nothing is copied.
+- `status()` now remembers a failed provisioning attempt and returns `broken` (with `binaryVersion`, `toolsDir`, and `lastError`) instead of `missing` when the target directory is absent.
+- The unused `homeDir` constructor option was removed; the default `toolsRoot` uses `os.homedir()` directly.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

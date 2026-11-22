@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** done
+**Status:** resolved
 
 - [x] pnpm workspace 包含 `dsh-labview-mcp` 插件包；`package.json` 声明 `dsh.bundle.patch`，patch 插入一个 Host 插件行。
 - [x] Host 插件导出 `apply(ctx, config)`，注册 `labview_mcp_status` 和 `labview_mcp_repair` 两个原生工具；stub 状态下 `labview_mcp_status` 返回 `state: 'missing'`。
@@ -15,6 +15,10 @@
 ## Comments
 
 Implemented on `feat/v2-implementation`.
+
+### Review corrections (2026-11-23)
+
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files created
 

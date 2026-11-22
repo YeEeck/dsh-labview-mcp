@@ -22,6 +22,7 @@ const SUPPORTED_PLATFORM = 'win32'
 const SUPPORTED_ARCH = 'x64'
 
 const STAGING_PREFIX = '.staging-'
+const BACKUP_SUFFIX = '.old-'
 const EXECUTABLE_RELATIVE_PATH = path.join('bin', 'LabVIEWMCP.exe')
 const VERSION_DIR_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$/
 
@@ -36,6 +37,11 @@ const LABVIEW_CONFLICT_MESSAGE =
   'a "labview" MCP server is already configured or registered by another source; remove that '
   + 'server (for example the old dsh-labview-mcp v1 bundle) and run labview_mcp_repair so this '
   + 'plugin can register its own "labview" server'
+
+/** True when a value is usable as the per-tool-call timeout. */
+function isValidToolCallTimeout(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
 
 /**
  * Plugin config schema: Standard Schema V1, hand-rolled so the package keeps no
@@ -64,9 +70,7 @@ export const Config = {
       const toolCallTimeoutMs = raw.toolCallTimeoutMs === undefined
         ? DEFAULT_TOOL_CALL_TIMEOUT_MS
         : raw.toolCallTimeoutMs
-      if (typeof toolCallTimeoutMs !== 'number'
-        || !Number.isFinite(toolCallTimeoutMs)
-        || toolCallTimeoutMs <= 0) {
+      if (!isValidToolCallTimeout(toolCallTimeoutMs)) {
         return {
           issues: [{
             message: 'toolCallTimeoutMs must be a positive finite number',
@@ -256,6 +260,8 @@ export class LabviewService {
   #provisioningInfo = null
   #activeVersionDir = null
   #lastError = undefined
+  #lastProvisionFailure = null
+  #lastRegistrationFailure = null
   #registration = null
   #registrationPromise = null
   #releasePromise = null
@@ -271,7 +277,6 @@ export class LabviewService {
    * @param {object|null} [options.registrar] MCP manager seam (`ctx.mcpManager` in production).
    * @param {string} [options.platform] defaults to `process.platform`.
    * @param {string} [options.arch] defaults to `process.arch`.
-   * @param {string} [options.homeDir] defaults to `os.homedir()` when `toolsRoot` is omitted.
    * @param {number} [options.toolCallTimeoutMs] per-tool-call timeout for the registered server.
    * @param {number} [options.mcpStartupTimeoutMs] registration entry startup budget and connect wait.
    * @param {number} [options.registrationCloseTimeoutMs] bounded wait for a disposed registration.
@@ -282,20 +287,17 @@ export class LabviewService {
     registrar = null,
     platform = process.platform,
     arch = process.arch,
-    homeDir,
     toolCallTimeoutMs = DEFAULT_TOOL_CALL_TIMEOUT_MS,
     mcpStartupTimeoutMs = MCP_STARTUP_TIMEOUT_MS,
     registrationCloseTimeoutMs = DEFAULT_REGISTRATION_CLOSE_TIMEOUT_MS,
   } = {}) {
-    if (typeof toolCallTimeoutMs !== 'number'
-      || !Number.isFinite(toolCallTimeoutMs)
-      || toolCallTimeoutMs <= 0) {
+    if (!isValidToolCallTimeout(toolCallTimeoutMs)) {
       throw new TypeError('toolCallTimeoutMs must be a positive finite number')
     }
 
-    const home = homeDir ?? os.homedir()
     this.#binaryPackageRoot = binaryPackageRoot ?? null
-    this.#toolsRoot = toolsRoot ?? path.join(home, '.dsh', 'tools', 'labview-mcp')
+    this.#toolsRoot = toolsRoot
+      ?? path.join(os.homedir(), '.dsh', 'tools', 'labview-mcp')
     this.#registrar = registrar
     this.#platform = platform
     this.#arch = arch
@@ -434,6 +436,19 @@ export class LabviewService {
       }
     }
 
+    const provisionFailure = this.#lastProvisionFailure
+    if (provisionFailure
+      && provisionFailure.binaryVersion === info.version
+      && samePath(provisionFailure.toolsDir, versionDir)) {
+      return {
+        state: 'broken',
+        ...base,
+        binaryVersion: info.version,
+        toolsDir: versionDir,
+        lastError: provisionFailure.lastError,
+      }
+    }
+
     return {
       state: 'missing',
       ...base,
@@ -527,6 +542,9 @@ export class LabviewService {
       if (existing && !this.#releasing) {
         return { ...base, state: 'conflict', lastError: LABVIEW_CONFLICT_MESSAGE }
       }
+      if (this.#lastRegistrationFailure) {
+        return { ...base, ...this.#lastRegistrationFailure }
+      }
       return base
     }
 
@@ -541,10 +559,21 @@ export class LabviewService {
 
     const status = existing.status ?? {}
     if (status.state === 'connected') {
+      if (typeof status.toolCount === 'number' && this.#serverVersion !== undefined) {
+        return {
+          ...base,
+          toolCount: status.toolCount,
+          serverVersion: this.#serverVersion,
+        }
+      }
+      const missing = [
+        ...(typeof status.toolCount === 'number' ? [] : ['toolCount']),
+        ...(this.#serverVersion === undefined ? ['serverVersion'] : []),
+      ]
       return {
         ...base,
-        ...(typeof status.toolCount === 'number' ? { toolCount: status.toolCount } : {}),
-        ...(this.#serverVersion === undefined ? {} : { serverVersion: this.#serverVersion }),
+        state: 'provisioning',
+        lastError: `MCP server "labview" is connected but has not reported ${missing.join(' or ')} yet`,
       }
     }
     if (status.state === 'failed') {
@@ -573,6 +602,7 @@ export class LabviewService {
     }
     return {
       ...base,
+      state: 'provisioning',
       lastError: status.lastError ?? `MCP server "labview" is ${status.state ?? 'connecting'}`,
     }
   }
@@ -598,23 +628,15 @@ export class LabviewService {
     try {
       list = await this.#listServers()
     } catch (error) {
-      return {
-        ...base,
-        state: 'broken',
-        lastError: `failed to read the MCP server list: ${errorMessage(error)}`,
-      }
+      return this.#registrationFailure(base, 'broken', `failed to read the MCP server list: ${errorMessage(error)}`)
     }
     if (this.#disposed) return base
     if (this.#findLabview(list)) {
-      return { ...base, state: 'conflict', lastError: LABVIEW_CONFLICT_MESSAGE }
+      return this.#registrationFailure(base, 'conflict', LABVIEW_CONFLICT_MESSAGE)
     }
 
     if (typeof this.#registrar.register !== 'function') {
-      return {
-        ...base,
-        state: 'broken',
-        lastError: 'the MCP manager does not expose register()',
-      }
+      return this.#registrationFailure(base, 'broken', 'the MCP manager does not expose register()')
     }
 
     let disposer
@@ -626,20 +648,31 @@ export class LabviewService {
     } catch (error) {
       const message = errorMessage(error)
       if (/already (?:configured|registered)|already exists/i.test(message)) {
-        return { ...base, state: 'conflict', lastError: `${LABVIEW_CONFLICT_MESSAGE} (${message})` }
+        return this.#registrationFailure(base, 'conflict', `${LABVIEW_CONFLICT_MESSAGE} (${message})`)
       }
-      return {
-        ...base,
-        state: 'broken',
-        lastError: `failed to register the "labview" MCP server: ${message}`,
-      }
+      return this.#registrationFailure(
+        base,
+        'broken',
+        `failed to register the "labview" MCP server: ${message}`,
+      )
     }
 
     this.#registration = typeof disposer === 'function' ? disposer : () => {}
+    this.#lastRegistrationFailure = null
     this.#serverVersion = undefined
     await this.#probeServerVersion()
     if (this.#disposed) return base
     return this.#waitForConnected(base)
+  }
+
+  /** Persist a failed registration attempt so a later status() cannot report ready. */
+  #registrationFailure(base, state, lastError) {
+    this.#lastRegistrationFailure = { state, lastError }
+    return {
+      ...base,
+      state,
+      lastError,
+    }
   }
 
   /** Ask the manager to probe the server; the result is cached for status. */
@@ -662,10 +695,12 @@ export class LabviewService {
       if (this.#disposed) return base
       const described = await this.#describeRegistration(base)
       if (described.state === 'broken' || described.state === 'conflict') return described
-      if (typeof described.toolCount === 'number') return described
+      if (described.state === 'ready' && typeof described.toolCount === 'number') return described
+      if (this.#serverVersion === undefined) await this.#probeServerVersion()
       if (Date.now() >= deadline) {
         return {
           ...described,
+          state: 'broken',
           lastError: described.lastError
             ?? `MCP server "labview" did not report connected within ${this.#mcpStartupTimeoutMs} ms`,
         }
@@ -680,7 +715,7 @@ export class LabviewService {
     try {
       return await this.#ensureRegistered(status)
     } catch (error) {
-      return { ...status, state: 'broken', lastError: errorMessage(error) }
+      return this.#registrationFailure(status, 'broken', errorMessage(error))
     }
   }
 
@@ -774,7 +809,9 @@ export class LabviewService {
     try {
       if (!force && await isFile(executablePath)) {
         this.#activeVersionDir = versionDir
+        this.#lastProvisionFailure = null
         this.#lastError = undefined
+        await this.#pruneVersions()
         return await this.#afterProvisionReady({
           state: 'ready',
           ...base,
@@ -785,10 +822,6 @@ export class LabviewService {
 
       await mkdir(this.#toolsRoot, { recursive: true })
       await this.#removeStaleStages()
-
-      if (await pathExists(versionDir)) {
-        await rm(versionDir, { recursive: true, force: true })
-      }
 
       stageDir = path.join(this.#toolsRoot, `${STAGING_PREFIX}${randomUUID()}`)
       try {
@@ -813,9 +846,42 @@ export class LabviewService {
         throw new Error(`staged runtime is missing ${EXECUTABLE_RELATIVE_PATH}`)
       }
 
-      await rename(stageDir, versionDir)
-      stageDir = null
+      // Swap only after the new copy is verified: the previous runtime stays
+      // intact until the stage is known good, so a failed repair is harmless.
+      let backupDir = null
+      if (await pathExists(versionDir)) {
+        backupDir = path.join(
+          this.#toolsRoot,
+          `${info.version}${BACKUP_SUFFIX}${randomUUID()}`,
+        )
+        await rename(versionDir, backupDir)
+      }
+      try {
+        await rename(stageDir, versionDir)
+        stageDir = null
+      } catch (error) {
+        if (backupDir) {
+          try {
+            await rename(backupDir, versionDir)
+          } catch (restoreError) {
+            throw new Error(
+              `failed to move the staged runtime into ${versionDir}: ${errorMessage(error)}; `
+              + `restoring ${backupDir} failed: ${errorMessage(restoreError)}`,
+            )
+          }
+        }
+        throw error
+      }
+      if (backupDir) {
+        try {
+          await rm(backupDir, { recursive: true, force: true })
+        } catch {
+          // A leftover backup is harmless and never mistaken for a version directory.
+        }
+      }
+
       this.#activeVersionDir = versionDir
+      this.#lastProvisionFailure = null
       this.#lastError = undefined
       await this.#pruneVersions()
 
@@ -828,6 +894,11 @@ export class LabviewService {
     } catch (error) {
       const message = errorMessage(error)
       this.#lastError = message
+      this.#lastProvisionFailure = {
+        binaryVersion: info.version,
+        toolsDir: versionDir,
+        lastError: message,
+      }
       if (stageDir) {
         try {
           await rm(stageDir, { recursive: true, force: true })
@@ -952,7 +1023,6 @@ export function apply(ctx, config) {
     registrar: ctx.mcpManager ?? null,
     platform: process.platform,
     arch: process.arch,
-    homeDir: os.homedir(),
     toolCallTimeoutMs: config?.toolCallTimeoutMs ?? DEFAULT_TOOL_CALL_TIMEOUT_MS,
   })
 

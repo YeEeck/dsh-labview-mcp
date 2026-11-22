@@ -105,6 +105,7 @@ function createFakeRegistrar({
   toolCount = 121,
   serverVersion = '3.1.0',
   statusAfterRegister,
+  registerError,
 } = {}) {
   const calls = { register: [], probe: [], list: 0 }
   const live = new Map()
@@ -129,6 +130,7 @@ function createFakeRegistrar({
       ]
     },
     register(name, entry) {
+      if (registerError) throw new Error(registerError)
       if (external.some((server) => server.name === name) || live.has(name)) {
         throw new Error(`mcp-manager: server "${name}" is already configured or registered`)
       }
@@ -366,6 +368,37 @@ test('unsupported, missing, and broken runtimes never register', async () => {
   assert.match(brokenStatus.lastError, /checksum mismatch/i)
   assert.equal(brokenRegistrar.calls.register.length, 0)
   assert.equal(await exists(path.join(brokenWorkspace, 'tools', '3.1.0')), false)
+})
+
+test('a generic register() failure is persisted and reported as broken by status()', async () => {
+  const registrar = createFakeRegistrar({ registerError: 'spawn failed: access denied' })
+  const { service } = await makeService({ registrar })
+
+  const ensured = await service.ensure()
+  assert.equal(ensured.state, 'broken')
+  assert.match(ensured.lastError, /failed to register/)
+  assert.match(ensured.lastError, /access denied/)
+
+  const status = await service.status()
+  assert.equal(status.state, 'broken')
+  assert.match(status.lastError, /failed to register/)
+  assert.match(status.lastError, /access denied/)
+  assert.equal(status.serverVersion, undefined)
+  assert.equal(status.toolCount, undefined)
+})
+
+test('a live connecting registration is reported as provisioning, never ready', async () => {
+  const registrar = createFakeRegistrar({ connected: false })
+  const { service } = await makeService({ registrar, mcpStartupTimeoutMs: 50 })
+
+  const ensured = await service.ensure()
+  assert.equal(ensured.state, 'broken')
+  assert.match(ensured.lastError, /connecting|did not report connected/i)
+
+  const status = await service.status()
+  assert.equal(status.state, 'provisioning')
+  assert.equal(status.serverVersion, undefined)
+  assert.equal(status.toolCount, undefined)
 })
 
 test('a failed live registration is reported as broken', async () => {

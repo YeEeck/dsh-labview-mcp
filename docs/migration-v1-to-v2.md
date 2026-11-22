@@ -1,5 +1,9 @@
 # v1 → v2 迁移与回滚清单
 
+> **打包副本：** 本文件同时作为 `packages/dsh-labview-mcp/docs/migration-v1-to-v2.md` 随插件包发布；两份内容必须保持一致。
+>
+> **Packaging note:** the same document ships inside the plugin package as `docs/migration-v1-to-v2.md`; keep both copies in sync.
+
 本清单把已在 `desktop` profile 上手工安装的 v1（本地 `link:` bundle + `%USERPROFILE%\.dsh\tools\labview-mcp\current`）迁移到 v2（可安装插件包 + 版本化供给目录）。命令可直接复制执行；`plugin_manager` 动作在 DSH Agent 会话中调用，其余为 PowerShell。
 
 > **重要：重启注意事项**

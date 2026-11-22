@@ -116,7 +116,7 @@ function versionDirectories(entries) {
     .map((entry) => entry.name)
 }
 
-test('fresh install: missing -> ensure() -> ready with a complete version directory', async () => {
+test('fresh provision: missing -> ensure() -> ready with a complete version directory', async () => {
   const workspace = await makeTemporaryDirectory()
   const toolsRoot = path.join(workspace, 'tools')
   const fixture = await buildBinaryPackage({ version: '3.1.0' })
@@ -345,7 +345,76 @@ test('manifest mismatch reports broken and leaves no ready version or staging di
 
   const entries = await readdir(toolsRoot, { withFileTypes: true })
   assert.equal(entries.some((entry) => entry.name.startsWith('.staging-')), false)
-  assert.notEqual((await service.status()).state, 'ready')
+
+  const afterStatus = await service.status()
+  assert.equal(afterStatus.state, 'broken')
+  assert.equal(afterStatus.binaryVersion, '3.1.0')
+  assert.equal(afterStatus.toolsDir, path.join(toolsRoot, '3.1.0'))
+  assert.match(afterStatus.lastError, /checksum mismatch/i)
+})
+
+test('force repair with a broken source leaves the previous healthy runtime intact', async () => {
+  const workspace = await makeTemporaryDirectory()
+  const toolsRoot = path.join(workspace, 'tools')
+  const fixture = await buildBinaryPackage()
+  const service = new LabviewService({
+    binaryPackageRoot: fixture.root,
+    toolsRoot,
+    platform: 'win32',
+    arch: 'x64',
+  })
+
+  assert.equal((await service.ensure()).state, 'ready')
+  const provisionedExecutable = path.join(toolsRoot, '3.1.0', 'bin', 'LabVIEWMCP.exe')
+  const healthyExecutable = await readFile(provisionedExecutable, 'utf8')
+  assert.equal(healthyExecutable, fixture.runtimeFiles['bin/LabVIEWMCP.exe'])
+
+  const manifestPath = path.join(fixture.root, 'labview-mcp.manifest.sha256')
+  const lines = (await readFile(manifestPath, 'utf8')).trimEnd().split('\n')
+  const executableLineIndex = lines.findIndex((line) => line.endsWith('  bin/LabVIEWMCP.exe'))
+  assert.notEqual(executableLineIndex, -1)
+  lines[executableLineIndex] = `${'0'.repeat(64)}  bin/LabVIEWMCP.exe`
+  await writeFile(manifestPath, `${lines.join('\n')}\n`)
+
+  const repaired = await service.repair({ force: true })
+  assert.equal(repaired.state, 'broken')
+  assert.match(repaired.lastError, /checksum mismatch/i)
+
+  assert.equal(await readFile(provisionedExecutable, 'utf8'), healthyExecutable)
+  assert.equal(await exists(path.join(toolsRoot, '3.1.0')), true)
+  const entries = await readdir(toolsRoot, { withFileTypes: true })
+  assert.equal(entries.some((entry) => entry.name.startsWith('.staging-')), false)
+  assert.equal(entries.some((entry) => entry.name.includes('.old-')), false)
+})
+
+test('ensure() on an already-ready root prunes old version directories to two', async () => {
+  const workspace = await makeTemporaryDirectory()
+  const toolsRoot = path.join(workspace, 'tools')
+  const fixture = await buildBinaryPackage({ version: '3.1.0' })
+
+  await mkdir(path.join(toolsRoot, '3.1.0', 'bin'), { recursive: true })
+  await writeFile(
+    path.join(toolsRoot, '3.1.0', 'bin', 'LabVIEWMCP.exe'),
+    'already provisioned\n',
+  )
+  for (const version of ['1.0.0', '2.0.0', '3.0.0']) {
+    await mkdir(path.join(toolsRoot, version), { recursive: true })
+    await writeFile(path.join(toolsRoot, version, 'marker.txt'), version)
+  }
+
+  const service = new LabviewService({
+    binaryPackageRoot: fixture.root,
+    toolsRoot,
+    platform: 'win32',
+    arch: 'x64',
+  })
+
+  assert.equal((await service.ensure()).state, 'ready')
+
+  const entries = await readdir(toolsRoot, { withFileTypes: true })
+  assert.deepEqual(versionDirectories(entries).sort(), ['3.0.0', '3.1.0'])
+  assert.equal(await exists(path.join(toolsRoot, '1.0.0')), false)
+  assert.equal(await exists(path.join(toolsRoot, '2.0.0')), false)
 })
 
 test('concurrent ensure calls share one provisioning pass and status reports provisioning', async () => {

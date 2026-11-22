@@ -4,7 +4,7 @@
 
 **Blocked by:** 03
 
-**Status:** done
+**Status:** resolved
 
 - [x] 只有 `LabviewService.status().state === 'ready'` 后才调用 `ctx.mcpManager.register('labview', entry)`。
 - [x] 注册项为 stdio：command 指向供给目录的 `LabVIEWMCP.exe`，cwd 指向其 `bin` 目录，`toolCallTimeoutMs` 来自插件 Config（默认 300000）。
@@ -17,6 +17,12 @@
 ## Comments
 
 Implemented on `feat/v2-implementation` (ticket 04 only).
+
+### Review corrections (2026-11-23)
+
+- Registration failures are persisted: a generic `register()` throw, a conflict, or a server-list read failure makes a later `status()` return `broken`/`conflict` with `lastError` instead of `ready` without `serverVersion`/`toolCount`.
+- A `connecting`/`reconnecting` live status is reported as `provisioning`; `ready` requires `connected` plus a numeric `toolCount` and a probed `serverVersion`. A connection wait that times out returns `broken`.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

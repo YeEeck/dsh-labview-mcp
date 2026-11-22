@@ -4,7 +4,7 @@
 
 **Blocked by:** 04
 
-**Status:** done
+**Status:** resolved
 
 - [x] 迁移前备份 v1 的 `local-bundles/dsh-labview-mcp`，并记录回滚命令。
 - [x] 从 profile 移除 v1 bundle，确认 `mcpManager.list()` 不再有 `labview` 配置项。
@@ -18,6 +18,12 @@
 ## Comments
 
 Completed on `feat/v2-implementation` (ticket 05 only). Phase A evidence file (local scratch): `C:\Users\PC\AppData\Local\Temp\dsh-labview-mcp-v2-notes\ticket05-phaseA-evidence.md`.
+
+### Review corrections (2026-11-23)
+
+- The intended `mcpManager.list()` check cannot be executed directly from an Agent session (no inspect provider exposes it). The equivalent post-removal evidence is `Tool.listTools` showing 0 names matching `mcp__labview__*` or `labview_mcp_*`, plus `plugin_manager list_plugins` having no `dsh-labview-mcp` row. The recorded Phase B run used `plugin_manager list_bundles` (26 rows, no `dsh-labview-mcp`) and `Config.listConfigs` (`entries: []`); both establish the same absence.
+- The full E2E (install → provision → register → 122 tools → uninstall) was captured on internal `0.1.0`. Final `1.0.0` was re-verified in ticket 07 (install + `labview_mcp_status`), not by repeating the full E2E; the runtime, provisioning, and registration code is unchanged between those versions.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

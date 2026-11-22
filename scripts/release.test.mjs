@@ -25,7 +25,12 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runRelease, downloadVerifiedAsset, DEFAULT_MIRRORS } from './release.mjs'
+import {
+  runRelease,
+  downloadVerifiedAsset,
+  checkPublishCooldown,
+  DEFAULT_MIRRORS,
+} from './release.mjs'
 
 const SCRIPT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'release.mjs')
 const temporaryDirectories = []
@@ -108,11 +113,13 @@ function sha256(value) {
  *
  * @param {object} [options]
  * @param {boolean} [options.omitExecutable] leave `bin/LabVIEWMCP.exe` out.
+ * @param {boolean} [options.includeManifestAsset] include the manifest asset.
  * @param {string} [options.zipDigestOverride] replace the zip asset digest.
  * @param {boolean} [options.omitZipDigest] remove the zip asset digest.
  */
 async function createFixture({
   omitExecutable = false,
+  includeManifestAsset = true,
   zipDigestOverride,
   omitZipDigest = false,
 } = {}) {
@@ -123,6 +130,7 @@ async function createFixture({
     ...(omitExecutable ? {} : { 'bin/LabVIEWMCP.exe': 'fixture executable\n' }),
     'bin/pylabview/app/LICENSE-pylabview.txt': 'pylabview fixture license\n',
     'bin/scripts/check.py': 'print("fixture")\n',
+    'bin/docs/guide.md': '# fixture guide\n',
     'agents/one.md': '# fixture agent\n',
     'hooks/hooks.json': '{}\n',
     '.mcp.json': '{"mcpServers":{}}\n',
@@ -140,15 +148,17 @@ async function createFixture({
   )
   const manifestPath = path.join(root, 'labview-mcp.manifest.sha256')
   const manifestText = `${manifestLines.join('\n')}\n`
-  await writeFile(manifestPath, manifestText)
+  if (includeManifestAsset) {
+    await writeFile(manifestPath, manifestText)
+  }
 
   const zipPath = path.join(root, 'labview-mcp.zip')
   await runTar(['-a', '-cf', zipPath, '-C', releaseDirectory, '.'])
 
   const zipStat = await stat(zipPath)
   const zipSha256 = await sha256File(zipPath)
-  const manifestStat = await stat(manifestPath)
-  const manifestSha256 = await sha256File(manifestPath)
+  const manifestStat = includeManifestAsset ? await stat(manifestPath) : null
+  const manifestSha256 = includeManifestAsset ? await sha256File(manifestPath) : null
 
   const zipAsset = {
     name: 'labview-mcp.zip',
@@ -159,18 +169,21 @@ async function createFixture({
   if (!omitZipDigest) {
     zipAsset.digest = zipDigestOverride ?? `sha256:${zipSha256}`
   }
-  const manifestAsset = {
-    name: 'labview-mcp.manifest.sha256',
-    size: manifestStat.size,
-    digest: `sha256:${manifestSha256}`,
-    browser_download_url:
-      'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.0/labview-mcp.manifest.sha256',
+  const assets = [zipAsset]
+  if (includeManifestAsset) {
+    assets.push({
+      name: 'labview-mcp.manifest.sha256',
+      size: manifestStat.size,
+      digest: `sha256:${manifestSha256}`,
+      browser_download_url:
+        'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.0/labview-mcp.manifest.sha256',
+    })
   }
 
   const releaseJsonPath = path.join(root, 'release.json')
   await writeFile(
     releaseJsonPath,
-    `${JSON.stringify({ tag_name: 'v3.1.0', assets: [zipAsset, manifestAsset] }, null, 2)}\n`,
+    `${JSON.stringify({ tag_name: 'v3.1.0', assets }, null, 2)}\n`,
   )
 
   return {
@@ -236,6 +249,7 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   assert.equal(summary.expectedFileCount, fixture.fileCount)
   assert.equal(summary.downloads.zip.source, 'local')
   assert.equal(summary.downloads.manifest.source, 'local')
+  assert.equal(summary.binary.manifestGenerated, false)
 
   assert.equal(await exists(summary.binary.tarballPath), true)
   assert.equal(await exists(summary.plugin.tarballPath), true)
@@ -282,6 +296,7 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
     'THIRD-PARTY-NOTICES.md',
     'docs/DETAIL.md',
     'docs/DETAIL.zh.md',
+    'docs/migration-v1-to-v2.md',
     'docs/preview.svg',
   ]) {
     assert.ok(pluginEntries.includes(required), `plugin tarball is missing ${required}`)
@@ -296,6 +311,7 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
     'README.md',
     'docs/DETAIL.md',
     'docs/DETAIL.zh.md',
+    'docs/migration-v1-to-v2.md',
     'docs/preview.svg',
   ]) {
     assert.ok(pluginPublishedPaths.includes(required), `plugin dry-run is missing ${required}`)
@@ -313,6 +329,86 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
     + `(${summary.binary.tarballBytes} bytes), `
     + `${path.basename(summary.plugin.tarballPath)} `
     + `(${summary.plugin.tarballBytes} bytes)`,
+  )
+})
+
+test('a release JSON without a manifest asset builds with a generated manifest', async () => {
+  const fixture = await createFixture({ includeManifestAsset: false })
+  const outDir = path.join(fixture.root, 'dist')
+
+  const summary = await runRelease({
+    releaseJsonPath: fixture.releaseJsonPath,
+    archivePath: fixture.zipPath,
+    outDir,
+    publishMode: 'dry-run',
+    environment: {},
+  })
+
+  assert.equal(summary.ok, true)
+  assert.equal(summary.release.manifestAsset, null)
+  assert.equal(summary.downloads.manifest, null)
+  assert.equal(summary.expectedFileCount, null)
+  assert.equal(summary.binary.manifestGenerated, true)
+  assert.equal(summary.binary.runtimeFileCount, fixture.fileCount)
+
+  const binaryEntries = await listTarballEntries(summary.binary.tarballPath)
+  assert.ok(binaryEntries.includes('labview-mcp.manifest.sha256'))
+
+  const report = JSON.parse(await readFile(summary.reportPath, 'utf8'))
+  assert.equal(report.release.manifestAsset, null)
+  assert.equal(report.binary.manifestGenerated, true)
+})
+
+test('the plugin publish cooldown requires a 24-hour-old binary version', async () => {
+  const publishedAt = Date.parse('2026-11-22T12:00:00.000Z')
+  const fetchImpl = async (url) => {
+    assert.match(url, /dsh-labview-mcp-win32-x64$/)
+    return new Response(JSON.stringify({
+      name: 'dsh-labview-mcp-win32-x64',
+      time: { '3.1.0': new Date(publishedAt).toISOString() },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  await assert.rejects(
+    checkPublishCooldown({
+      version: '3.1.0',
+      now: publishedAt + 23 * 60 * 60 * 1000,
+      fetchImpl,
+    }),
+    /less than 24 hours[\s\S]*--skip-publish-cooldown/,
+  )
+
+  const passed = await checkPublishCooldown({
+    version: '3.1.0',
+    now: publishedAt + 24 * 60 * 60 * 1000,
+    fetchImpl,
+  })
+  assert.equal(passed.version, '3.1.0')
+  assert.equal(passed.packageName, 'dsh-labview-mcp-win32-x64')
+  assert.equal(passed.ageMs, 24 * 60 * 60 * 1000)
+})
+
+test('the plugin publish cooldown refuses an unpublished or future version', async () => {
+  const fetchImpl = async () => new Response(
+    JSON.stringify({ name: 'dsh-labview-mcp-win32-x64', time: {} }),
+    { status: 200 },
+  )
+  await assert.rejects(
+    checkPublishCooldown({ version: '3.1.0', now: Date.now(), fetchImpl }),
+    /no publish time/i,
+  )
+
+  const futureFetch = async () => new Response(
+    JSON.stringify({ time: { '3.1.0': '2026-11-24T00:00:00.000Z' } }),
+    { status: 200 },
+  )
+  await assert.rejects(
+    checkPublishCooldown({
+      version: '3.1.0',
+      now: Date.parse('2026-11-23T00:00:00.000Z'),
+      fetchImpl: futureFetch,
+    }),
+    /in the future/i,
   )
 })
 

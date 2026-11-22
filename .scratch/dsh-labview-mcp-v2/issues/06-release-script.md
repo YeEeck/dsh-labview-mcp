@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 03
 
-**Status:** done
+**Status:** resolved
 
 - [x] 脚本从 GitHub API 读取最新 release，要求固定资产名 `labview-mcp.zip` 和 API 提供的 `sha256:` digest。
 - [x] 下载按 GitHub → `ghfast.top` → `gh-proxy.com` → `ghproxy.net` 顺序尝试；每个来源都按官方大小和 SHA-256 校验。
@@ -17,6 +17,12 @@
 ## Comments
 
 Implemented on `feat/v2-implementation`.
+
+### Review corrections (2026-11-23)
+
+- The GitHub manifest asset is now optional, matching the spec (only `labview-mcp.zip` and its API digest are mandatory). When the release JSON has no manifest asset, the builder generates a manifest for the extracted runtime and includes it in the package; when the asset is provided, the strict size/SHA-256 verification stays in force.
+- `--publish plugin` now checks npm for the binary package version's publish time and refuses until it is at least 24 hours old; `--skip-publish-cooldown` is the explicit override. Binary publishing is unaffected.
+- Status convention corrected from `done` to the tracker's `resolved` completion state.
 
 ### Files changed
 

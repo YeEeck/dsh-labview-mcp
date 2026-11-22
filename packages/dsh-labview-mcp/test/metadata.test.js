@@ -51,6 +51,17 @@ test('package files cover the entry, patch, locales, docs, icon, README, and lic
   }
 })
 
+test('the migration checklist ships in the package and README links it relatively', async () => {
+  const readme = await readPackageFile('README.md')
+  assert.match(readme, /\]\(docs\/migration-v1-to-v2\.md\)/)
+  assert.ok(!readme.includes('../../docs/migration-v1-to-v2.md'))
+
+  const migration = await readPackageFile('docs/migration-v1-to-v2.md')
+  assert.match(migration, /^# v1 → v2 迁移与回滚清单/m)
+  assert.match(migration, /## 6\. 回滚到 v1/)
+  assert.ok(migration.length > 7_000, 'expected the full migration checklist')
+})
+
 test('English locale states the unofficial status, cost, requirements, and diagnostics', async () => {
   const locale = JSON.parse(await readPackageFile('locale/en.json'))
   assert.equal(locale.meta.title, 'LabVIEW MCP (unofficial)')
@@ -60,6 +71,7 @@ test('English locale states the unofficial status, cost, requirements, and diagn
   for (const expected of [
     'unofficial',
     "Zuehlke's LabVIEW MCP",
+    'provisions',
     '57 MB',
     '122',
     '65–75k',
@@ -72,6 +84,7 @@ test('English locale states the unofficial status, cost, requirements, and diagn
   ]) {
     assert.ok(description.includes(expected), `English description is missing ${expected}`)
   }
+  assert.ok(!description.includes('installs the Windows x64 runtime'))
   assert.equal(description[0], description[0].toUpperCase())
 })
 
@@ -84,6 +97,7 @@ test('Chinese locale is complete and points at the Chinese detail document', asy
   for (const expected of [
     '非官方',
     'Zuehlke',
+    '供给',
     '57 MB',
     '122',
     '65–75k',

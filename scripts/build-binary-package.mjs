@@ -70,6 +70,11 @@ const PACKAGE_DESCRIPTION =
 const RELEASE_EXECUTABLE = 'bin/LabVIEWMCP.exe'
 const RELEASE_VERSION_FILE = 'VERSION.txt'
 const MANIFEST_FILE_NAME = 'labview-mcp.manifest.sha256'
+const RELEASE_REQUIRED_DIRECTORIES = Object.freeze([
+  'bin/pylabview',
+  'bin/scripts',
+  'bin/docs',
+])
 
 const CACHE_DIRECTORY_NAMES = new Set(['__pycache__', '.labviewmcp'])
 const CACHE_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db'])
@@ -262,6 +267,25 @@ async function readManifest(manifestPath) {
 }
 
 /**
+ * Generate a manifest for a release tree that does not ship one.
+ *
+ * Only used when the release has no manifest asset; the generated file is
+ * written into the package and verified like any other manifest.
+ */
+async function generateRuntimeManifest(runtimeRoot, manifestPath) {
+  const files = await collectFiles(runtimeRoot)
+  if (files.length === 0) {
+    throw new Error(`cannot generate a manifest for an empty runtime: ${runtimeRoot}`)
+  }
+  const lines = []
+  for (const relativePath of files) {
+    const digest = await sha256File(path.join(runtimeRoot, ...relativePath.split('/')))
+    lines.push(`${digest}  ${relativePath}`)
+  }
+  await writeFile(manifestPath, `${lines.join('\n')}\n`)
+}
+
+/**
  * Verify a runtime tree against the upstream manifest.
  *
  * Every manifest entry must exist with the recorded hash. Every file in the
@@ -445,6 +469,7 @@ async function packPackage(packageDirectory, packDestination) {
  * @param {string} [options.expectedSha256] required SHA-256 of the zip.
  * @param {number|string} [options.expectedSize] required byte size of the zip.
  * @param {string} [options.manifestPath] manifest asset when the release tree lacks one.
+ * @param {boolean} [options.generateManifest] generate a manifest when the release has none.
  * @param {number|string|null} [options.expectedFileCount] required runtime file count.
  * @param {boolean} [options.pack] run `npm pack` after building (default true).
  * @param {string} [options.packDestination] where `npm pack` writes the tarball.
@@ -458,6 +483,7 @@ export async function buildBinaryPackage({
   expectedSha256,
   expectedSize,
   manifestPath,
+  generateManifest = false,
   expectedFileCount = DEFAULT_EXPECTED_RUNTIME_FILE_COUNT,
   pack = true,
   packDestination = DEFAULT_PACK_DESTINATION,
@@ -511,6 +537,12 @@ export async function buildBinaryPackage({
     if (!await isFile(path.join(releaseRoot, RELEASE_EXECUTABLE))) {
       throw new Error(`release tree is missing ${RELEASE_EXECUTABLE}`)
     }
+    for (const relativeDirectory of RELEASE_REQUIRED_DIRECTORIES) {
+      const directoryPath = path.join(releaseRoot, ...relativeDirectory.split('/'))
+      if (!await isDirectory(directoryPath)) {
+        throw new Error(`release tree is missing required directory ${relativeDirectory}`)
+      }
+    }
     const releaseVersion = await readReleaseVersion(releaseRoot)
     if (releaseVersion !== String(version)) {
       throw new Error(
@@ -518,11 +550,26 @@ export async function buildBinaryPackage({
       )
     }
 
-    const resolvedManifestPath = await resolveManifestPath({
-      releaseRoot,
-      zipPath: resolvedZipPath,
-      manifestPath,
-    })
+    let resolvedManifestPath = null
+    let manifestGenerated = false
+    if (generateManifest) {
+      try {
+        resolvedManifestPath = await resolveManifestPath({
+          releaseRoot,
+          zipPath: resolvedZipPath,
+          manifestPath,
+        })
+      } catch (error) {
+        if (!/manifest not found/i.test(errorMessage(error))) throw error
+        manifestGenerated = true
+      }
+    } else {
+      resolvedManifestPath = await resolveManifestPath({
+        releaseRoot,
+        zipPath: resolvedZipPath,
+        manifestPath,
+      })
+    }
 
     const runtimeDirectory = path.join(stagingDirectory, 'runtime')
     await cp(releaseRoot, runtimeDirectory, { recursive: true })
@@ -533,10 +580,12 @@ export async function buildBinaryPackage({
       path.join(releaseRoot, RELEASE_VERSION_FILE),
       path.join(stagingDirectory, RELEASE_VERSION_FILE),
     )
-    await copyFile(
-      resolvedManifestPath,
-      path.join(stagingDirectory, MANIFEST_FILE_NAME),
-    )
+    const stagedManifestPath = path.join(stagingDirectory, MANIFEST_FILE_NAME)
+    if (manifestGenerated) {
+      await generateRuntimeManifest(runtimeDirectory, stagedManifestPath)
+    } else {
+      await copyFile(resolvedManifestPath, stagedManifestPath)
+    }
     await copyFile(
       path.join(resolvedAssetsDirectory, 'LICENSE-Zuehlke.txt'),
       path.join(stagingDirectory, 'LICENSE'),
@@ -601,7 +650,10 @@ export async function buildBinaryPackage({
       manifestEntryCount: verification.manifestEntryCount,
       manifestListedCacheFiles: verification.manifestListedCacheEntries,
       runtimeBytes: verification.totalBytes,
-      manifestPath: resolvedManifestPath,
+      manifestPath: manifestGenerated
+        ? path.join(resolvedOutDir, MANIFEST_FILE_NAME)
+        : resolvedManifestPath,
+      manifestGenerated,
       tarballPath: null,
       tarballBytes: null,
       tarballEntryCount: null,
@@ -630,6 +682,7 @@ Options:
   --expected-sha256 <hex>      Refuse the zip unless its SHA-256 matches
   --expected-size <bytes>      Refuse the zip unless its size matches
   --manifest <path>            Manifest asset when the release tree does not ship one
+  --generate-manifest          Generate a manifest when the release has none
   --expected-file-count <n>    Runtime file count (default: ${DEFAULT_EXPECTED_RUNTIME_FILE_COUNT})
   --pack-destination <dir>     Where npm pack writes the tarball (default: ${DEFAULT_PACK_DESTINATION})
   --no-pack                    Build the package without running npm pack
@@ -658,6 +711,10 @@ function parseArguments(argv) {
     }
     if (argument === '--no-pack') {
       options.pack = false
+      continue
+    }
+    if (argument === '--generate-manifest') {
+      options.generateManifest = true
       continue
     }
 
