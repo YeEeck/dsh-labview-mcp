@@ -14,6 +14,8 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 
+import { createStatusRoutes } from './status-routes.js'
+
 export const inject = ['tools', 'mcpManager']
 
 const STATES = ['unsupported', 'missing', 'provisioning', 'ready', 'broken', 'conflict']
@@ -1010,16 +1012,19 @@ const statusOutput = {
 }
 
 /**
- * Register the native diagnostic tools and start provisioning in the
- * background for the lifetime of the plugin fiber. Provisioning success also
- * registers the `labview` MCP server with the injected manager.
+ * Register the native diagnostic tools, the browser-visible status routes, and
+ * start provisioning in the background for the lifetime of the plugin fiber.
+ * Provisioning success also registers the `labview` MCP server with the
+ * injected manager.
  * @param {object} ctx - Host plugin context carrying `tools`, `mcpManager`, and `effect`.
  * @param {object} [config] - validated plugin row config.
  */
 export function apply(ctx, config) {
+  const binaryPackageRoot = resolveBinaryPackageRoot()
+  const toolsRoot = path.join(os.homedir(), '.dsh', 'tools', 'labview-mcp')
   const service = new LabviewService({
-    binaryPackageRoot: resolveBinaryPackageRoot(),
-    toolsRoot: path.join(os.homedir(), '.dsh', 'tools', 'labview-mcp'),
+    binaryPackageRoot,
+    toolsRoot,
     registrar: ctx.mcpManager ?? null,
     platform: process.platform,
     arch: process.arch,
@@ -1053,6 +1058,20 @@ export function apply(ctx, config) {
 
   ctx.effect(() => ctx.tools.register(statusTool))
   ctx.effect(() => ctx.tools.register(repairTool))
+
+  // The status panel in Plugins reads the same service over two exact Fetch
+  // routes. `connection` exists only in compositions with a browser carrier, so
+  // it is an optional injection: without one the plugin keeps its tools and its
+  // provisioning, and simply registers no routes.
+  ctx.inject(['connection'], (connectionCtx) => {
+    connectionCtx.effect(() => {
+      const routes = createStatusRoutes({ service, binaryPackageRoot, toolsRoot })
+      const disposers = routes.map((route) => connectionCtx.connection.fetch.register(route))
+      return () => {
+        for (const dispose of disposers) dispose()
+      }
+    })
+  })
 
   ctx.effect(() => {
     // Provision in the background: `apply` must never block Host start-up.

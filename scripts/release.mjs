@@ -92,6 +92,8 @@ const BINARY_REQUIRED_ENTRIES = Object.freeze([
 const BINARY_REQUIRED_PATTERNS = Object.freeze([/^runtime\//])
 const PLUGIN_REQUIRED_ENTRIES = Object.freeze([
   'index.js',
+  'client.js',
+  'status-routes.js',
   'cordis.patch.yml',
   'icon.svg',
   'README.md',

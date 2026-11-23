@@ -51,6 +51,15 @@ test('package files cover the entry, patch, locales, docs, icon, README, and lic
   }
 })
 
+test('the bundle ships the browser half behind the runtime status panel', () => {
+  assert.equal(manifest.exports['./client'], './client.js')
+  assert.equal(manifest.dsh.client.platform, 'web')
+
+  for (const required of ['client.js', 'status-routes.js']) {
+    assert.ok(manifest.files.includes(required), `package.json files is missing ${required}`)
+  }
+})
+
 test('the migration checklist ships in the package and README links it relatively', async () => {
   const readme = await readPackageFile('README.md')
   assert.match(readme, /\]\(docs\/migration-v1-to-v2\.md\)/)

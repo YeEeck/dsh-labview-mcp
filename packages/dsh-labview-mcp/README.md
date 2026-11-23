@@ -10,6 +10,8 @@ endorsed by NI or Zuehlke.
 
 - **122 LabVIEW MCP tools** in every new session, named `mcp__labview__*`.
 - **Two native diagnostics**: `labview_mcp_status` and `labview_mcp_repair`.
+- **Runtime status in Plugins**: the plugin's own page shows the live state and
+  can repair it without leaving the UI.
 - **Versioned local runtime**: the plugin copies the runtime to
   `%USERPROFILE%\.dsh\tools\labview-mcp\<binary-version>\` and keeps the two
   newest versions. It never runs the executable from `node_modules`.
@@ -43,6 +45,30 @@ A new session then sees the `mcp__labview__*` tools.
 The first launch of the unsigned `LabVIEWMCP.exe` can be slow while Windows
 scans it; the plugin gives the server up to 120 seconds to start.
 
+## Runtime status in Plugins
+
+Open **Plugins** and the plugin's own page. Its title carries a state tag
+(`Ready`, `Provisioning…`, `Not provisioned`, `Broken`, `Server conflict`,
+`Unsupported platform`), and a **Runtime** card below the page content reports
+the same facts as `labview_mcp_status`:
+
+- state, platform, runtime version, MCP server version, tool count, and the
+  versioned runtime directory;
+- the resolved binary package `dsh-labview-mcp-win32-x64` and its path, or
+  `Not installed — reinstall the plugin` when the optional package is missing;
+- the last error, when there is one.
+
+**Refresh** re-reads the state. **Repair** runs the same provisioning pass as
+`labview_mcp_repair` from the page; the card polls while it runs, disables the
+button until it settles, and disables it on a platform without a binary package.
+Repair restarts the `labview` MCP server, so a tool call running at that moment
+may fail.
+
+The tag, the card, and the routes behind them exist only while the plugin is
+enabled. The panel is a convenience: if it reports `Status unavailable` — for
+example right after an upgrade, before DSH restarts — `labview_mcp_status`
+remains authoritative.
+
 ## Configuration
 
 The only configurable option is the per-tool-call timeout, `toolCallTimeoutMs`,
@@ -66,7 +92,9 @@ tools directory are fixed.
 returns the same status; pass `{ "force": true }` to recopy an intact but
 suspected-bad runtime. Both tools are registered even when the platform is
 unsupported or the binary package is missing, and they are the first place to
-look when `mcp__labview__*` tools are absent or failing.
+look when `mcp__labview__*` tools are absent or failing. The plugin's page in
+**Plugins** shows the same status and offers the same repair (see
+[Runtime status in Plugins](#runtime-status-in-plugins)).
 
 | State | Meaning | What to do |
 |---|---|---|

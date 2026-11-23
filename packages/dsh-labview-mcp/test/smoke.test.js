@@ -9,14 +9,16 @@ const packageDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(await readFile(path.join(packageDir, 'package.json'), 'utf8'))
 
 /** Minimal stand-in for the Host plugin context, including the injected MCP manager. */
-function fakeContext() {
+function fakeContext({ connection = false } = {}) {
   const registered = []
   const cleanups = []
   const mcpServers = []
-  return {
+  const routes = []
+  const ctx = {
     registered,
     cleanups,
     mcpServers,
+    routes,
     tools: {
       register(definition) {
         registered.push(definition)
@@ -52,7 +54,24 @@ function fakeContext() {
     effect(setup) {
       cleanups.push(setup())
     },
+    inject(dependencies, callback) {
+      if (dependencies.every((dependency) => ctx[dependency] !== undefined)) callback(ctx)
+      return () => {}
+    },
   }
+
+  if (connection) {
+    ctx.connection = {
+      fetch: {
+        register(route) {
+          routes.push(route)
+          return () => {}
+        },
+      },
+    }
+  }
+
+  return ctx
 }
 
 /** Apply the plugin and return its registered tool definitions. */
@@ -96,6 +115,19 @@ test('plugin entry exports apply', () => {
 test('apply registers exactly the two native diagnostic tools', () => {
   const names = registerTools().map((tool) => tool.name)
   assert.deepEqual(names, ['labview_mcp_status', 'labview_mcp_repair'])
+})
+
+test('the status routes exist only where a browser carrier exists', () => {
+  const withCarrier = fakeContext({ connection: true })
+  apply(withCarrier, {})
+  assert.deepEqual(
+    withCarrier.routes.map((route) => route.path),
+    ['/api/labview-mcp.status', '/api/labview-mcp.repair'],
+  )
+
+  const headless = fakeContext()
+  apply(headless, {})
+  assert.deepEqual(headless.routes, [])
 })
 
 test('status tool reports state: missing', async () => {

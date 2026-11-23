@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "LabVIEW MCP (unofficial)",
-    "description": "Zuehlke LabVIEW MCP 服务器的非官方 DSH 插件包（非 NI 或 Zuehlke 官方产品）。首次使用时供给 Windows x64 运行树（约 57 MB 下载），随后注册 122 个 LabVIEW MCP 工具；每次请求约消耗 65–75k tokens，且仅支持 Windows x64。需要退出时在 Plugins 页禁用插件，新会话中的工具会随之移除。若 mcp__labview__* 工具缺失，请先查看原生 labview_mcp_status 和 labview_mcp_repair 诊断工具。",
+    "description": "Zuehlke LabVIEW MCP 服务器的非官方 DSH 插件包（非 NI 或 Zuehlke 官方产品）。首次使用时供给 Windows x64 运行树（约 57 MB 下载），随后注册 122 个 LabVIEW MCP 工具；每次请求约消耗 65–75k tokens，且仅支持 Windows x64。需要退出时在 Plugins 页禁用插件，新会话中的工具会随之移除。若 mcp__labview__* 工具缺失，请先查看原生 labview_mcp_status 和 labview_mcp_repair 诊断工具；插件在 Plugins 页的详情会展示同样的运行状态，并可直接修复。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

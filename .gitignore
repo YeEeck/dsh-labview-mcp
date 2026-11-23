@@ -1,5 +1,40 @@
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Build output
 dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Package artifacts
 *.tgz
+
+# Logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editors & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+
+# Caches
+.cache/
+.eslintcache
+
+# Scratch workspace (upstream reference dumps and per-feature deps stay local)
 .scratch/upstream/
 .scratch/**/node_modules/
