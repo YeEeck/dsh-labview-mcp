@@ -9,6 +9,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -29,6 +30,24 @@ const EXECUTABLE_RELATIVE_PATH = path.join('bin', 'LabVIEWMCP.exe')
 const VERSION_DIR_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$/
 
 const MCP_SERVER_NAME = 'labview'
+const BINARY_PACKAGE_NAME = 'dsh-labview-mcp-win32-x64'
+
+/**
+ * The platform package range this plugin requires, read from the plugin's own
+ * manifest so a dependency move cannot leave a stale copy behind in a message.
+ */
+function readBinaryPackageRange() {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    return manifest?.dependencies?.[BINARY_PACKAGE_NAME]
+      ?? manifest?.optionalDependencies?.[BINARY_PACKAGE_NAME]
+      ?? null
+  } catch {
+    return null
+  }
+}
+
+const BINARY_PACKAGE_RANGE = readBinaryPackageRange()
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000
 const MCP_STARTUP_TIMEOUT_MS = 120_000
 const DEFAULT_REGISTRATION_CLOSE_TIMEOUT_MS = 10_000
@@ -329,7 +348,11 @@ export class LabviewService {
    */
   async #readBinaryInfo() {
     if (!this.#binaryPackageRoot) {
-      throw new Error('platform binary package is not installed')
+      const required = BINARY_PACKAGE_RANGE ? `${BINARY_PACKAGE_NAME}@${BINARY_PACKAGE_RANGE}` : BINARY_PACKAGE_NAME
+      throw new Error(
+        `${required} is not installed; reinstall dsh-labview-mcp `
+        + '(a package mirror may not carry the 57 MB runtime package yet)',
+      )
     }
 
     const packageRoot = this.#binaryPackageRoot
@@ -1065,7 +1088,13 @@ export function apply(ctx, config) {
   // provisioning, and simply registers no routes.
   ctx.inject(['connection'], (connectionCtx) => {
     connectionCtx.effect(() => {
-      const routes = createStatusRoutes({ service, binaryPackageRoot, toolsRoot })
+      const routes = createStatusRoutes({
+        service,
+        binaryPackageRoot,
+        binaryPackageName: BINARY_PACKAGE_NAME,
+        binaryPackageRange: BINARY_PACKAGE_RANGE,
+        toolsRoot,
+      })
       const disposers = routes.map((route) => connectionCtx.connection.fetch.register(route))
       return () => {
         for (const dispose of disposers) dispose()

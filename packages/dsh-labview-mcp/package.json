@@ -1,6 +1,6 @@
 {
   "name": "dsh-labview-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Unofficial DSH bundle for Zuehlke's LabVIEW MCP server",
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,7 @@
     "LICENSE-pylabview.txt",
     "THIRD-PARTY-NOTICES.md"
   ],
-  "optionalDependencies": {
+  "dependencies": {
     "dsh-labview-mcp-win32-x64": "~3.1.0"
   },
   "dsh": {

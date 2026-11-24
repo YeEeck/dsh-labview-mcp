@@ -15,13 +15,13 @@ endorsed by NI or Zuehlke.
 - **Versioned local runtime**: the plugin copies the runtime to
   `%USERPROFILE%\.dsh\tools\labview-mcp\<binary-version>\` and keeps the two
   newest versions. It never runs the executable from `node_modules`.
-- **No install scripts, no build step, no runtime dependencies** in the plugin
-  package.
+- **No install scripts and no build step** in the plugin package; its only
+  dependency is the platform runtime package.
 
 ## Requirements
 
-- **Windows x64**. Other platforms install the plugin but report
-  `state: unsupported`; no binary package exists for them.
+- **Windows x64**. The runtime package is a required dependency, so a non-Windows profile
+  refuses the installation; no binary package exists for other platforms.
 - **LabVIEW is optional.** The `pylv_*` tools use the bundled pylabview engine
   and work without LabVIEW installed. The `lvai_*` tools need LabVIEW's AI gRPC
   service (`lvai.LVAI`) to be available.
@@ -37,10 +37,17 @@ endorsed by NI or Zuehlke.
 2. Choose **Add plugin**.
 3. Enter `dsh-labview-mcp` and confirm.
 
-The Host downloads the optional Windows x64 runtime package during
+The Host downloads the required Windows x64 runtime package during
 installation. On first start, the plugin provisions the runtime in the
 background and registers the `labview` MCP server after provisioning succeeds.
 A new session then sees the `mcp__labview__*` tools.
+
+A package mirror (npmmirror is DSH's default fallback in China) can lag behind
+npm for the 57 MB runtime package. When that happens, pnpm cannot resolve
+`dsh-labview-mcp-win32-x64@3.1.0` and the installation fails; it no longer
+installs a plugin that later reports a missing runtime. Install again with
+`registry.npmjs.org` as the registry, or wait until the mirror serves the
+package and reinstall.
 
 The first launch of the unsigned `LabVIEWMCP.exe` can be slow while Windows
 scans it; the plugin gives the server up to 120 seconds to start.
@@ -98,7 +105,7 @@ look when `mcp__labview__*` tools are absent or failing. The plugin's page in
 
 | State | Meaning | What to do |
 |---|---|---|
-| `missing` | The optional `dsh-labview-mcp-win32-x64` package cannot be resolved, or the runtime has not been provisioned yet. | Wait if provisioning is in progress; otherwise reinstall the plugin or run `labview_mcp_repair`. |
+| `missing` | The `dsh-labview-mcp-win32-x64` package cannot be resolved, or the runtime has not been provisioned yet. A profile installed before 1.1.0 can be in this state even though the plugin itself installed. | Wait if provisioning is in progress; otherwise reinstall the plugin from a registry that has the runtime package. `labview_mcp_repair` cannot install an npm package. |
 | `provisioning` | The runtime is being copied in the background. | Wait; then call `labview_mcp_status` again. |
 | `ready` | The runtime exists and the server connection is healthy. | No action. `toolCount` should be 122. |
 | `broken` | The runtime is incomplete, corrupt, or the MCP server failed/closed. | Run `labview_mcp_repair`; use `force: true` if the runtime looks intact but is corrupt. |
@@ -134,8 +141,8 @@ packages:
 
 - The binary package `dsh-labview-mcp-win32-x64` has the **upstream release
   version** (currently `3.1.0`). The plugin package `dsh-labview-mcp` has its
-  **own independent version** (currently `1.0.0`) and declares the binary
-  package as `optionalDependencies: { "dsh-labview-mcp-win32-x64": "~3.1.0" }`.
+  **own independent version** (currently `1.1.0`) and declares the binary
+  package as `dependencies: { "dsh-labview-mcp-win32-x64": "~3.1.0" }`.
   An upstream minor or major release needs a plugin version bump; patch
   releases inside `~3.1.0` do not.
 - The script reads the latest GitHub release, requires the fixed asset
@@ -145,10 +152,21 @@ packages:
   `npm publish --dry-run` file-list checks.
 - Release order: publish the binary package first, wait **24 hours**, then
   publish the plugin. The script enforces this by checking the binary version's
-  npm publish time before `--publish plugin`; `--skip-publish-cooldown` is the
-  explicit override. Hold the public announcement until the plugin version is
-  at least 24 hours old, so pnpm's default `minimumReleaseAge` of 1440 minutes
-  does not make the first-day install fail.
+  npm publish time before `--publish plugin`; `--skip-publish-cooldown` now also
+  requires `DSH_RELEASE_ALLOW_EARLY_PLUGIN=1`, so an early plugin publish cannot
+  slip through. Hold the public announcement until the plugin version is at
+  least 24 hours old, so pnpm's default `minimumReleaseAge` of 1440 minutes does
+  not make the first-day install fail.
+- Fresh-profile install check: `node scripts/verify-install.mjs --version <v>`
+  installs the published plugin into a throwaway profile from npmjs and npmmirror
+  and fails when the runtime package does not arrive. Run it after each publish,
+  before announcing.
+- Registry gate: before `--publish plugin`, the script verifies that the exact
+  binary version answers on npmjs and on npmmirror (it asks the mirror to sync
+  first). After either publish it verifies the new tarball on both registries
+  and fails the run when a mirror stays stale, naming the manual sync URL. A
+  mirror that lacks the 57 MB package would otherwise install a runtime-less
+  plugin without any error.
 - Publishing reads `NPM_TOKEN` from the environment only. The token is never
   written to the repository or package metadata.
 - Upstream releases are reviewed manually; there is no automatic publish.

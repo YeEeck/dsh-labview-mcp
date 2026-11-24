@@ -45,8 +45,9 @@ window.__ModuleLoader__.load({
       'field.toolsDir': 'Runtime directory',
       'binary.title': 'Binary package',
       'binary.installed': 'Installed',
-      'binary.missing': 'Not installed — reinstall the plugin',
+      'binary.missing': 'Not installed — reinstall the plugin (a mirror may lag; use registry.npmjs.org)',
       'binary.root': 'Path',
+      'binary.required': 'Required',
       'error.title': 'Last error',
       'repairError.title': 'Repair failed',
       checkedAt: 'Checked',
@@ -77,8 +78,9 @@ window.__ModuleLoader__.load({
       'field.toolsDir': '运行树目录',
       'binary.title': '二进制包',
       'binary.installed': '已安装',
-      'binary.missing': '未安装 — 请重装插件',
+      'binary.missing': '未安装 — 请重装插件（镜像可能尚未同步，可改用 registry.npmjs.org）',
       'binary.root': '路径',
+      'binary.required': '需要',
       'error.title': '最近错误',
       'repairError.title': '修复失败',
       checkedAt: '检查时间',
@@ -440,6 +442,13 @@ window.__ModuleLoader__.load({
         ))
         if (binary && binary.root) {
           rows.push(field(translate('binary.root'), binary.root, true))
+        }
+        if (binary && !binary.installed && binary.name) {
+          rows.push(field(
+            translate('binary.required'),
+            binary.range ? `${binary.name}@${binary.range}` : binary.name,
+            true,
+          ))
         }
 
         const toolsDir = currentStatus.toolsDir || currentView.toolsRoot

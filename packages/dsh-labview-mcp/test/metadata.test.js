@@ -22,14 +22,14 @@ function assertSelfContainedSvg(svg, { width, height, viewBox }) {
   }
 }
 
-test('public plugin version is 1.0.0 and keeps its optional binary dependency', () => {
+test('public plugin version is 1.1.0 and requires its binary dependency', () => {
   assert.equal(manifest.name, 'dsh-labview-mcp')
-  assert.equal(manifest.version, '1.0.0')
-  assert.equal(manifest.dependencies, undefined)
+  assert.equal(manifest.version, '1.1.0')
   assert.equal(manifest.scripts, undefined)
-  assert.deepEqual(manifest.optionalDependencies, {
+  assert.deepEqual(manifest.dependencies, {
     'dsh-labview-mcp-win32-x64': '~3.1.0',
   })
+  assert.equal(manifest.optionalDependencies, undefined)
   assert.equal(manifest.exports['.'], './index.js')
   assert.equal(manifest.exports['./icon'], './icon.svg')
 })
@@ -93,7 +93,7 @@ test('English locale states the unofficial status, cost, requirements, and diagn
   ]) {
     assert.ok(description.includes(expected), `English description is missing ${expected}`)
   }
-  assert.ok(!description.includes('installs the Windows x64 runtime'))
+  assert.ok(description.includes('runtime package'))
   assert.equal(description[0], description[0].toUpperCase())
 })
 

@@ -171,13 +171,13 @@ pnpm --dir $profileDir install
 
 ## 附：本地 E2E tarball 的构建方式
 
-正式发布用 release 脚本产出的 tarball；本地离线验证可用同一份插件代码，把 `optionalDependencies` 指向本地二进制包：
+正式发布用 release 脚本产出的 tarball；本地离线验证可用同一份插件代码，把 `dependencies` 里的平台包指向本地二进制包：
 
 ```powershell
 $tmp = "$env:TEMP\dsh-labview-mcp-local-pack\dsh-labview-mcp"
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 Copy-Item -Path 'packages\dsh-labview-mcp\*' -Destination $tmp -Recurse
-# 只改临时副本的 optionalDependencies：
+# 只改临时副本的 dependencies：
 #   "dsh-labview-mcp-win32-x64": "file:D:/Code/dsh-proj/dsh-labview-mcp/dist/dsh-labview-mcp-win32-x64-3.1.0.tgz"
 Push-Location $tmp
 npm pack
@@ -185,4 +185,4 @@ Pop-Location
 Move-Item "$tmp\dsh-labview-mcp-1.0.0.tgz" 'D:\Code\dsh-proj\dsh-labview-mcp\dist\dsh-labview-mcp-1.0.0-local.tgz' -Force
 ```
 
-不要修改仓库内 `packages/dsh-labview-mcp/package.json` 的 `optionalDependencies`（它应保持 `~3.1.0`）。
+不要修改仓库内 `packages/dsh-labview-mcp/package.json` 的 `dependencies`（它应保持 `~3.1.0`）。

@@ -29,6 +29,10 @@ import {
   runRelease,
   downloadVerifiedAsset,
   checkPublishCooldown,
+  readRegistryVersion,
+  requestMirrorSync,
+  waitForRegistryVersion,
+  NPMMIRROR_REGISTRY,
   DEFAULT_MIRRORS,
 } from './release.mjs'
 
@@ -126,7 +130,7 @@ async function createFixture({
   const root = await makeTemporaryDirectory()
   const releaseDirectory = path.join(root, 'release')
   const files = {
-    'VERSION.txt': 'tag: v3.1.0\nversion: 3.1.0\ncommit: fixture\n',
+    'VERSION.txt': 'tag: v3.1.99\nversion: 3.1.99\ncommit: fixture\n',
     ...(omitExecutable ? {} : { 'bin/LabVIEWMCP.exe': 'fixture executable\n' }),
     'bin/pylabview/app/LICENSE-pylabview.txt': 'pylabview fixture license\n',
     'bin/scripts/check.py': 'print("fixture")\n',
@@ -164,7 +168,7 @@ async function createFixture({
     name: 'labview-mcp.zip',
     size: zipStat.size,
     browser_download_url:
-      'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.0/labview-mcp.zip',
+      'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.99/labview-mcp.zip',
   }
   if (!omitZipDigest) {
     zipAsset.digest = zipDigestOverride ?? `sha256:${zipSha256}`
@@ -176,14 +180,14 @@ async function createFixture({
       size: manifestStat.size,
       digest: `sha256:${manifestSha256}`,
       browser_download_url:
-        'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.0/labview-mcp.manifest.sha256',
+        'https://github.com/Zuehlke/labview-mcp/releases/download/v3.1.99/labview-mcp.manifest.sha256',
     })
   }
 
   const releaseJsonPath = path.join(root, 'release.json')
   await writeFile(
     releaseJsonPath,
-    `${JSON.stringify({ tag_name: 'v3.1.0', assets }, null, 2)}\n`,
+    `${JSON.stringify({ tag_name: 'v3.1.99', assets }, null, 2)}\n`,
   )
 
   return {
@@ -242,9 +246,9 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   })
 
   assert.equal(summary.ok, true)
-  assert.equal(summary.release.tag, 'v3.1.0')
-  assert.equal(summary.binary.version, '3.1.0')
-  assert.equal(summary.plugin.version, '1.0.0')
+  assert.equal(summary.release.tag, 'v3.1.99')
+  assert.equal(summary.binary.version, '3.1.99')
+  assert.equal(summary.plugin.version, '1.1.0')
   assert.equal(summary.plugin.packageName, 'dsh-labview-mcp')
   assert.equal(summary.expectedFileCount, fixture.fileCount)
   assert.equal(summary.downloads.zip.source, 'local')
@@ -255,8 +259,8 @@ test('a good fixture produces both tarballs and a complete binary package', asyn
   assert.equal(await exists(summary.plugin.tarballPath), true)
   assert.ok(summary.binary.tarballBytes > 0)
   assert.ok(summary.plugin.tarballBytes > 0)
-  assert.match(path.basename(summary.binary.tarballPath), /^dsh-labview-mcp-win32-x64-3\.1\.0\.tgz$/)
-  assert.match(path.basename(summary.plugin.tarballPath), /^dsh-labview-mcp-1\.0\.0\.tgz$/)
+  assert.match(path.basename(summary.binary.tarballPath), /^dsh-labview-mcp-win32-x64-3\.1\.99\.tgz$/)
+  assert.match(path.basename(summary.plugin.tarballPath), /^dsh-labview-mcp-1\.1\.0\.tgz$/)
 
   const binaryEntries = await listTarballEntries(summary.binary.tarballPath)
   for (const required of [
@@ -599,4 +603,112 @@ test('mirror download rejects every checksum-mismatched candidate', async () => 
     /from any mirror[\s\S]*SHA-256 mismatch/i,
   )
   assert.equal(await exists(destinationPath), false)
+})
+
+test('readRegistryVersion requires the exact version and its tarball', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), method: init?.method ?? 'GET' })
+    if (String(url).endsWith('/dsh-labview-mcp-win32-x64')) {
+      return new Response(JSON.stringify({
+        versions: { '3.1.0': { dist: { tarball: 'https://registry.npmjs.org/dsh-labview-mcp-win32-x64/-/x.tgz' } } },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(null, { status: 200 })
+  }
+
+  const found = await readRegistryVersion({
+    packageName: 'dsh-labview-mcp-win32-x64',
+    version: '3.1.0',
+    fetchImpl,
+  })
+  assert.equal(found.found, true)
+  assert.equal(found.registryUrl, 'https://registry.npmjs.org')
+  assert.equal(calls.at(-1).method, 'HEAD')
+
+  const missing = await readRegistryVersion({
+    packageName: 'dsh-labview-mcp-win32-x64',
+    version: '3.2.0',
+    fetchImpl,
+  })
+  assert.equal(missing.found, false)
+  assert.match(missing.reason, /lists no dsh-labview-mcp-win32-x64@3\.2\.0/)
+})
+
+test('requestMirrorSync asks the mirror to pull the package upstream', async () => {
+  let seen
+  const result = await requestMirrorSync({
+    packageName: 'dsh-labview-mcp-win32-x64',
+    fetchImpl: async (url, init) => {
+      seen = { url: String(url), method: init?.method }
+      return new Response(null, { status: 200 })
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(seen.method, 'PUT')
+  assert.match(seen.url, /^https:\/\/registry-direct\.npmmirror\.com\/dsh-labview-mcp-win32-x64\/sync\?sync_upstream=true$/)
+  assert.equal(NPMMIRROR_REGISTRY, 'https://registry.npmmirror.com')
+})
+
+test('waitForRegistryVersion polls a stale mirror and syncs it first', async () => {
+  let metadataCalls = 0
+  const fetchImpl = async (url, init) => {
+    const target = String(url)
+    if (target.includes('/sync?')) return new Response(null, { status: 200 })
+    if (init?.method === 'HEAD') return new Response(null, { status: 200 })
+    metadataCalls += 1
+    const versions = metadataCalls < 3
+      ? {}
+      : { '3.1.0': { dist: { tarball: 'https://registry.npmmirror.com/dsh-labview-mcp-win32-x64/-/x.tgz' } } }
+    return new Response(JSON.stringify({ versions }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  const result = await waitForRegistryVersion({
+    packageName: 'dsh-labview-mcp-win32-x64',
+    version: '3.1.0',
+    registryUrl: NPMMIRROR_REGISTRY,
+    attempts: 3,
+    intervalMs: 1,
+    sleep: async () => {},
+    sync: true,
+    fetchImpl,
+  })
+
+  assert.equal(result.attempts, 3)
+  assert.equal(result.sync.ok, true)
+})
+
+test('waitForRegistryVersion refuses a mirror that never serves the version', async () => {
+  await assert.rejects(
+    waitForRegistryVersion({
+      packageName: 'dsh-labview-mcp-win32-x64',
+      version: '3.1.0',
+      registryUrl: NPMMIRROR_REGISTRY,
+      attempts: 2,
+      intervalMs: 0,
+      sleep: async () => {},
+      sync: true,
+      fetchImpl: async () => new Response(JSON.stringify({ versions: {} }), { status: 200 }),
+    }),
+    /not available from https:\/\/registry\.npmmirror\.com[\s\S]*registry-direct\.npmmirror\.com[\s\S]*sync\?sync_upstream=true/,
+  )
+})
+
+test('skipping the publish cooldown asks for an explicit environment override', async () => {
+  const fixture = await createFixture()
+  await assert.rejects(
+    runRelease({
+      releaseJsonPath: fixture.releaseJsonPath,
+      archivePath: fixture.zipPath,
+      outDir: path.join(fixture.root, 'dist'),
+      publishMode: 'plugin',
+      skipPublishCooldown: true,
+      environment: { NPM_TOKEN: 'token' },
+    }),
+    /DSH_RELEASE_ALLOW_EARLY_PLUGIN=1/,
+  )
 })

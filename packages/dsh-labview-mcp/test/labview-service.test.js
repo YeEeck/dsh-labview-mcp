@@ -283,6 +283,7 @@ test('missing binary package reports missing with a clear lastError and never cr
   const status = await absent.status()
   assert.equal(status.state, 'missing')
   assert.match(status.lastError, /not installed/i)
+  assert.match(status.lastError, /dsh-labview-mcp-win32-x64@~3\.1\.0/)
 
   const ensured = await absent.ensure()
   assert.equal(ensured.state, 'missing')

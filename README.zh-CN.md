@@ -26,14 +26,14 @@
   `%USERPROFILE%\.dsh\tools\labview-mcp\<binary-version>\`，只保留最新两个版本，
   可执行文件永远不从 `node_modules` 里运行。
 - **LabVIEW 可选**：`pylv_*` 系列工具不装 LabVIEW 也能用；`lvai_*` 系列需要 LabVIEW 的 AI gRPC 服务。
-- **没有东西要编译**：无安装脚本、无构建步骤、无运行时依赖。
+- **没有东西要编译**：无安装脚本、无构建步骤；唯一的依赖是随插件一起安装的平台运行包。
 
 ## 环境要求
 
 | 项目 | 说明 |
 | --- | --- |
 | **DSH** | 带有 **Plugins** 页面、支持插件包的版本。 |
-| **Windows x64** | 随包运行树只提供该平台。其他平台仍可安装，但会报告 `state: unsupported`。 |
+| **Windows x64** | 必须。平台运行包是必需依赖，其他平台上安装会被拒绝。 |
 | **LabVIEW** | 可选 —— 见上。 |
 | **磁盘** | `dsh-labview-mcp-win32-x64` 包约 57 MB，另加约 178 MB 已供给的运行树。 |
 | **Token** | 每次请求 65–75k：122 个工具定义会全部发给模型。不用时把插件禁用掉。 |
@@ -47,6 +47,9 @@
 DSH 会在安装时下载平台二进制包。首次启动时插件在后台完成供给，然后注册 `labview` MCP 服务器；
 新会话随即能看到 `mcp__labview__*` 工具。未签名的 `LabVIEWMCP.exe` 首次启动可能因 Windows
 扫描而变慢 —— 插件给它 120 秒启动时间。
+
+如果安装时 registry 解析不到 `dsh-labview-mcp-win32-x64@3.1.0`，说明该 registry 是镜像且尚未同步
+57 MB 的平台包。请改用 `registry.npmjs.org` 重装，或等镜像同步后重装；缺少平台包的镜像永远装不出可用插件。
 
 ## 使用
 

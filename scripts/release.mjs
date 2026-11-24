@@ -80,6 +80,12 @@ export const DEFAULT_API_TIMEOUT_MS = 60 * 1000
 export const DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org'
 export const BINARY_PACKAGE_NAME = 'dsh-labview-mcp-win32-x64'
 export const PLUGIN_PUBLISH_COOLDOWN_MS = 24 * 60 * 60 * 1000
+/** The China mirror DSH falls back to; a stale copy there makes a fresh install silently runtime-less. */
+export const NPMMIRROR_REGISTRY = 'https://registry.npmmirror.com'
+/** The control host that accepts a sync request; the registry host above only serves packages. */
+export const NPMMIRROR_SYNC_URL = 'https://registry-direct.npmmirror.com'
+export const REGISTRY_VERIFY_ATTEMPTS = 30
+export const REGISTRY_VERIFY_INTERVAL_MS = 10 * 1000
 
 const BINARY_PACKAGE_DIRECTORY_NAME = 'dsh-labview-mcp-win32-x64'
 const BINARY_REQUIRED_ENTRIES = Object.freeze([
@@ -614,6 +620,7 @@ async function readPluginPackage(packageDirectory) {
     version: metadata.version,
     directory: path.resolve(packageDirectory),
     packageJsonPath,
+    manifest: metadata,
   }
 }
 
@@ -785,6 +792,154 @@ export async function checkPublishCooldown({
 }
 
 /**
+ * Read one exact package version from a registry: the metadata must list it
+ * and its tarball must answer. A 404 or a missing version is an answer, not a
+ * fault, so the caller can poll and report what the registry said.
+ *
+ * @param {object} options
+ * @param {string} options.packageName npm package name.
+ * @param {string} options.version exact version to find.
+ * @param {string} [options.registryUrl] registry base URL.
+ * @param {Function} [options.fetchImpl] fetch implementation (tests).
+ * @param {number} [options.timeoutMs] per-request budget.
+ * @returns {Promise<{found: boolean, registryUrl: string, metadataUrl: string, tarball?: string, reason?: string}>}
+ */
+export async function readRegistryVersion({
+  packageName,
+  version,
+  registryUrl = DEFAULT_REGISTRY_URL,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+} = {}) {
+  if (typeof packageName !== 'string' || !packageName) {
+    throw new Error('readRegistryVersion requires a package name')
+  }
+  if (typeof version !== 'string' || !version) {
+    throw new Error('readRegistryVersion requires a version')
+  }
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('global fetch is not available; Node.js 18 or newer is required')
+  }
+  const base = registryUrl.replace(/\/$/, '')
+  const metadataUrl = `${base}/${encodeURIComponent(packageName)}`
+  const answer = (reason) => ({ found: false, registryUrl: base, metadataUrl, reason })
+  let response
+  try {
+    response = await fetchImpl(metadataUrl, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'dsh-labview-mcp-release-script',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (error) {
+    return answer(errorMessage(error))
+  }
+  if (response.status === 404) return answer('HTTP 404: the registry does not know the package')
+  if (!response.ok) return answer(`HTTP ${response.status}`)
+  let metadata
+  try {
+    metadata = await response.json()
+  } catch {
+    return answer('the registry returned malformed metadata JSON')
+  }
+  const entry = metadata?.versions?.[version]
+  if (!entry) return answer(`the registry lists no ${packageName}@${version}`)
+  const tarball = entry?.dist?.tarball
+  if (typeof tarball !== 'string' || !tarball) {
+    return answer(`the registry lists ${packageName}@${version} without a tarball URL`)
+  }
+  try {
+    const head = await fetchImpl(tarball, {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'dsh-labview-mcp-release-script' },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!head.ok) return answer(`the tarball answers HTTP ${head.status}`)
+  } catch (error) {
+    return answer(`the tarball is unreachable: ${errorMessage(error)}`)
+  }
+  return { found: true, registryUrl: base, metadataUrl, tarball }
+}
+
+/**
+ * Ask a mirror to pull a package from upstream. Best effort: a mirror that
+ * refuses the request is reported, never thrown, so the caller can poll.
+ *
+ * @param {object} options
+ * @param {string} options.packageName npm package name.
+ * @param {string} [options.syncUrl] mirror control host that accepts sync requests.
+ * @param {Function} [options.fetchImpl] fetch implementation (tests).
+ * @param {number} [options.timeoutMs] request budget.
+ * @returns {Promise<{url: string, ok: boolean, status?: number, error?: string}>}
+ */
+export async function requestMirrorSync({
+  packageName,
+  syncUrl = NPMMIRROR_SYNC_URL,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+} = {}) {
+  const base = syncUrl.replace(/\/$/, '')
+  const url = `${base}/${encodeURIComponent(packageName)}/sync?sync_upstream=true`
+  try {
+    const response = await fetchImpl(url, {
+      method: 'PUT',
+      headers: { 'User-Agent': 'dsh-labview-mcp-release-script' },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return { url, ok: response.ok, status: response.status }
+  } catch (error) {
+    return { url, ok: false, error: errorMessage(error) }
+  }
+}
+
+/**
+ * Poll a registry until it serves one exact version, optionally asking a mirror
+ * to sync first. Throws with the manual sync command when the budget runs out,
+ * so a stale mirror can never be mistaken for a published release.
+ *
+ * @param {object} options
+ * @param {string} options.packageName npm package name.
+ * @param {string} options.version exact version to wait for.
+ * @param {string} [options.registryUrl] registry base URL.
+ * @param {number} [options.attempts] checks to make.
+ * @param {number} [options.intervalMs] wait between checks.
+ * @param {Function} [options.sleep] delay seam (tests).
+ * @param {boolean} [options.sync] request a mirror sync before the first check.
+ * @param {Function} [options.fetchImpl] fetch implementation (tests).
+ * @returns {Promise<{packageName: string, version: string, registryUrl: string, attempts: number, sync: object|null}>}
+ */
+export async function waitForRegistryVersion({
+  packageName,
+  version,
+  registryUrl = DEFAULT_REGISTRY_URL,
+  attempts = REGISTRY_VERIFY_ATTEMPTS,
+  intervalMs = REGISTRY_VERIFY_INTERVAL_MS,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  sync = false,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const syncResult = sync
+    ? await requestMirrorSync({ packageName, fetchImpl })
+    : null
+  let last = null
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    last = await readRegistryVersion({ packageName, version, registryUrl, fetchImpl })
+    if (last.found) {
+      return { packageName, version, registryUrl: last.registryUrl, attempts: attempt, sync: syncResult }
+    }
+    if (attempt < attempts && intervalMs > 0) await sleep(intervalMs)
+  }
+  const manual = sync
+    ? `; trigger the sync and retry: PUT ${NPMMIRROR_SYNC_URL}/${encodeURIComponent(packageName)}/sync?sync_upstream=true`
+    : ''
+  throw new Error(
+    `${packageName}@${version} is not available from ${last.registryUrl} after ${attempts} checks `
+    + `(${last.reason})${manual}`,
+  )
+}
+
+/**
  * Run one complete release.
  *
  * @param {object} [options]
@@ -793,7 +948,7 @@ export async function checkPublishCooldown({
  * @param {string} [options.manifestPath] offline manifest asset (requires archivePath).
  * @param {string} [options.outDir] output directory (default `<repo>/dist`).
  * @param {'dry-run'|'binary'|'plugin'} [options.publishMode] `binary`/`plugin` publish for real.
- * @param {boolean} [options.skipPublishCooldown] bypass the plugin publish cooldown.
+ * @param {boolean} [options.skipPublishCooldown] bypass the plugin publish cooldown (also needs `DSH_RELEASE_ALLOW_EARLY_PLUGIN=1`).
  * @param {string} [options.registryUrl] npm registry URL used for the cooldown check.
  * @param {number} [options.now] current epoch milliseconds (tests).
  * @param {string} [options.repositoryRoot] repository root used for plugin package resolution.
@@ -834,6 +989,12 @@ export async function runRelease({
       `NPM_TOKEN is required for --publish ${publishMode}; set it in the environment only`,
     )
   }
+  if (skipPublishCooldown && environment?.DSH_RELEASE_ALLOW_EARLY_PLUGIN !== '1') {
+    throw new Error(
+      '--skip-publish-cooldown requires DSH_RELEASE_ALLOW_EARLY_PLUGIN=1; the plugin must never be '
+      + 'published before its binary package is installable',
+    )
+  }
   if (manifestPath && !archivePath) {
     throw new Error('--manifest requires --archive')
   }
@@ -860,13 +1021,37 @@ export async function runRelease({
   }
 
   let publishCooldown = null
-  if (publishMode === 'plugin' && !skipPublishCooldown) {
-    publishCooldown = await checkPublishCooldown({
-      version: release.version,
-      registryUrl,
-      now,
-      fetchImpl,
-    })
+  let registryChecks = null
+  if (publishMode === 'plugin') {
+    if (!skipPublishCooldown) {
+      publishCooldown = await checkPublishCooldown({
+        version: release.version,
+        registryUrl,
+        now,
+        fetchImpl,
+      })
+    }
+    // A plugin published while a mirror still lacks the 57 MB runtime package
+    // installs silently without a runtime on that mirror; refuse until both
+    // registries serve the exact binary version this plugin requires, even when
+    // the cooldown was explicitly overridden.
+    registryChecks = {
+      npmjs: await waitForRegistryVersion({
+        packageName: BINARY_PACKAGE_NAME,
+        version: release.version,
+        registryUrl,
+        attempts: 1,
+        intervalMs: 0,
+        fetchImpl,
+      }),
+      npmmirror: await waitForRegistryVersion({
+        packageName: BINARY_PACKAGE_NAME,
+        version: release.version,
+        registryUrl: NPMMIRROR_REGISTRY,
+        sync: true,
+        fetchImpl,
+      }),
+    }
   }
 
   const downloadDirectory = await mkdtemp(path.join(os.tmpdir(), 'dsh-labview-mcp-release-'))
@@ -942,6 +1127,23 @@ export async function runRelease({
     })
 
     const plugin = await readPluginPackage(pluginPackageDirectory)
+    // The plugin must require the binary version this release publishes; a stale
+    // range would install an older runtime or none at all on a fresh profile.
+    const requiredRange = plugin.manifest.dependencies?.[binaryBuild.packageName]
+      ?? plugin.manifest.optionalDependencies?.[binaryBuild.packageName]
+    if (typeof requiredRange !== 'string') {
+      throw new Error(
+        `${plugin.name}@${plugin.version} does not declare ${binaryBuild.packageName}; `
+        + 'add it to dependencies before releasing',
+      )
+    }
+    const [releaseMajor, releaseMinor] = release.version.split('.')
+    if (!requiredRange.startsWith(`~${releaseMajor}.${releaseMinor}.`)) {
+      throw new Error(
+        `${plugin.name}@${plugin.version} requires ${binaryBuild.packageName}@${requiredRange}, which `
+        + `does not cover the binary version ${release.version}; bump the plugin dependency range`,
+      )
+    }
     const pluginPack = await packPackage(plugin.directory, stagingDirectory)
 
     // ---- 3. npm publish --dry-run + content assertions -------------------
@@ -1001,6 +1203,30 @@ export async function runRelease({
         environment,
         timeoutMs: 10 * 60 * 1000,
       })
+      // The tarball must be resolvable from the registry the plugin was installed
+      // from and from the China mirror; a stale mirror is a release failure, not a
+      // silent install that later reports a missing binary package.
+      const publishedVersion = publishMode === 'binary' ? release.version : plugin.version
+      published = {
+        ...published,
+        registries: {
+          npmjs: await waitForRegistryVersion({
+            packageName: targetName,
+            version: publishedVersion,
+            registryUrl,
+            attempts: 6,
+            intervalMs: 5_000,
+            fetchImpl,
+          }),
+          npmmirror: await waitForRegistryVersion({
+            packageName: targetName,
+            version: publishedVersion,
+            registryUrl: NPMMIRROR_REGISTRY,
+            sync: true,
+            fetchImpl,
+          }),
+        },
+      }
     }
 
     const reportPath = path.join(resolvedOutDir, 'release-report.json')
@@ -1020,6 +1246,7 @@ export async function runRelease({
       },
       expectedFileCount,
       publishCooldown,
+      registryChecks,
       binary: {
         packageName: binaryBuild.packageName,
         version: binaryBuild.version,
@@ -1067,6 +1294,7 @@ Options:
   --out <dir>                 Output directory (default: ${DEFAULT_OUT_DIRECTORY})
   --publish <binary|plugin>   Actually publish that package (default: dry-run both)
   --skip-publish-cooldown     Bypass the 24-hour plugin publish cooldown
+                              (requires DSH_RELEASE_ALLOW_EARLY_PLUGIN=1)
   --zip-timeout-ms <ms>       Per-mirror zip timeout (default: ${DEFAULT_ZIP_TIMEOUT_MS})
   --manifest-timeout-ms <ms>  Per-mirror manifest timeout (default: ${DEFAULT_MANIFEST_TIMEOUT_MS})
   --api-timeout-ms <ms>       GitHub API timeout (default: ${DEFAULT_API_TIMEOUT_MS})
@@ -1138,6 +1366,7 @@ function compactSummary(summary) {
     downloads: summary.downloads,
     expectedFileCount: summary.expectedFileCount,
     publishCooldown: summary.publishCooldown,
+    registryChecks: summary.registryChecks,
     binary: {
       packageName: summary.binary.packageName,
       version: summary.binary.version,

@@ -51,7 +51,9 @@ async function readJsonBody(request) {
  * @param {object} options
  * @param {{ status(): Promise<object>, repair(options?: {force?: boolean}): Promise<object> }} options.service
  *   the `LabviewService` of the running plugin.
- * @param {string|null} [options.binaryPackageRoot] resolved optional binary package root.
+ * @param {string|null} [options.binaryPackageRoot] resolved binary package root.
+ * @param {string|null} [options.binaryPackageName] name of the platform package the plugin requires.
+ * @param {string|null} [options.binaryPackageRange] version range the plugin requires of it.
  * @param {string|null} [options.toolsRoot] directory holding the versioned runtimes.
  * @param {() => number} [options.now] clock seam for `checkedAt`.
  * @returns {Array<{path: string, methods: string[], requestBody: 'buffered', fetch: (request: Request) => Promise<Response>}>}
@@ -60,6 +62,8 @@ async function readJsonBody(request) {
 export function createStatusRoutes({
   service,
   binaryPackageRoot = null,
+  binaryPackageName = null,
+  binaryPackageRange = null,
   toolsRoot = null,
   now = () => Date.now(),
 } = {}) {
@@ -83,7 +87,12 @@ export function createStatusRoutes({
 
     return {
       status,
-      binaryPackage: { installed: binaryPackageRoot !== null, root: binaryPackageRoot },
+      binaryPackage: {
+        installed: binaryPackageRoot !== null,
+        root: binaryPackageRoot,
+        ...(binaryPackageName === null ? {} : { name: binaryPackageName }),
+        ...(binaryPackageRange === null ? {} : { range: binaryPackageRange }),
+      },
       toolsRoot,
       repairing: repair !== null,
       ...(repairError === undefined ? {} : { repairError }),

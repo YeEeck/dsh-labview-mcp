@@ -11,7 +11,7 @@
 发布两个 npm 包：
 
 - `dsh-labview-mcp`：约 50 KB 的 DSH 插件包，包含 bundle manifest、Host 插件、状态工具和中文/英文展示资源。
-- `dsh-labview-mcp-win32-x64`：约 57 MB 的平台二进制包，作为插件包的 `optionalDependency`，包含完整的 LabVIEW MCP 运行树和许可证。
+- `dsh-labview-mcp-win32-x64`：约 57 MB 的平台二进制包，作为插件包的**必需依赖**（1.1.0 起；1.0.0 为 `optionalDependency`），包含完整的 LabVIEW MCP 运行树和许可证。
 
 用户在 **Plugins → Add plugin** 输入 `dsh-labview-mcp` 后，插件在 Host 启动时后台把运行树供给到版本化目录，注册 `labview` MCP server，并暴露 `labview_mcp_status` / `labview_mcp_repair`。新会话中会出现 `mcp__labview__*` 工具，不需要手工下载或编辑 profile。
 
@@ -64,8 +64,8 @@
 
 - Two public npm packages under the `yeeeck` account: `dsh-labview-mcp` and `dsh-labview-mcp-win32-x64`.
 - Binary package version equals the upstream release tag (first release `3.1.0`). Plugin version is independent: `0.1.0` for internal testing, `1.0.0` for the public release.
-- The plugin declares `dsh-labview-mcp-win32-x64` as an `optionalDependency` with range `~3.1.0`. A future upstream minor or major release requires a plugin version bump; upstream patch releases within the same range do not.
-- The binary package declares `"os": ["win32"]` and `"cpu": ["x64"]`; other platforms install the plugin but report `unsupported`.
+- The plugin declares `dsh-labview-mcp-win32-x64` as a required `dependency` with range `~3.1.0` (changed from `optionalDependency` in 1.1.0 after a mirror-lag incident; see ADR 0001 revision). A future upstream minor or major release requires a plugin version bump; upstream patch releases within the same range do not.
+- The binary package declares `"os": ["win32"]` and `"cpu": ["x64"]`; other platforms are refused at install time. `state: unsupported` remains only for direct/local installs.
 - The binary package contains the full upstream release tree under `runtime/`, plus `VERSION.txt`, `labview-mcp.manifest.sha256`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. It is not a curated subset.
 
 ### Plugin package
@@ -137,7 +137,8 @@ interface LabviewService {
 - `scripts/release.mjs` reads the latest upstream release from the GitHub API, requires the fixed asset name `labview-mcp.zip` and an API-provided `sha256:` digest, downloads through the mirror order GitHub → `ghfast.top` → `gh-proxy.com` → `ghproxy.net`, and verifies size and SHA-256 before extraction.
 - The script builds the binary package from the extracted release tree, writes package metadata and version `3.1.0`, and runs `npm pack` for both packages.
 - Publishing reads `NPM_TOKEN` from the environment only; the token is never written to the repository or package metadata.
-- Release order: publish the binary package `3.1.0` first; after 24 hours publish the plugin `1.0.0`. The public announcement is held until the plugin version is at least 24 hours old, so pnpm’s default `minimumReleaseAge` of 1440 minutes does not make the install fail.
+- Release order: publish the binary package `3.1.0` first; after 24 hours publish the plugin. The public announcement is held until the plugin version is at least 24 hours old, so pnpm’s default `minimumReleaseAge` of 1440 minutes does not make the install fail.
+- Registry gate: before publishing the plugin, verify the exact binary version on npmjs and npmmirror (requesting a mirror sync first) and fail when either is stale; verify the new tarball on both registries after each publish. `--skip-publish-cooldown` additionally requires `DSH_RELEASE_ALLOW_EARLY_PLUGIN=1`.
 - Upstream follow-up is manual: a maintainer reviews the upstream changelog before running the script. No automatic publishing on upstream releases.
 
 ### Display and legal

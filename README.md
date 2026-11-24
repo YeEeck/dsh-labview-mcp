@@ -30,14 +30,15 @@ tools — no manual MCP setup, no profile editing, no build step.
   are kept, and the executable never runs from `node_modules`.
 - **LabVIEW is optional.** The `pylv_*` tools work without LabVIEW installed; the
   `lvai_*` tools need LabVIEW's AI gRPC service.
-- **Nothing to compile.** No install scripts, no build step, no runtime dependencies.
+- **Nothing to compile.** No install scripts, no build step; the only dependency is the
+  platform runtime package, installed with the plugin.
 
 ## Requirements
 
 | Requirement | Detail |
 | --- | --- |
 | **DSH** | A build that has the **Plugins** page and supports plugin bundles. |
-| **Windows x64** | Required by the bundled runtime. Other platforms install, then report `state: unsupported`. |
+| **Windows x64** | Required. The runtime package is a required dependency, so installation is refused on other platforms. |
 | **LabVIEW** | Optional — see above. |
 | **Disk** | ~57 MB for the `dsh-labview-mcp-win32-x64` package, plus ~178 MB of provisioned runtime. |
 | **Tokens** | 65–75k per request: all 122 tool definitions are sent to the model. Disable the plugin when you are not using it. |
@@ -52,6 +53,11 @@ DSH downloads the platform package during installation. On first start the plugi
 provisions the runtime in the background, then registers the `labview` MCP server;
 new sessions then see the `mcp__labview__*` tools. The first launch of the unsigned
 `LabVIEWMCP.exe` can be slow while Windows scans it — the plugin allows 120 seconds.
+
+If the install fails because the registry cannot resolve `dsh-labview-mcp-win32-x64@3.1.0`,
+the registry is a mirror that has not synced the 57 MB package yet. Install again with
+`registry.npmjs.org`, or wait for the mirror and reinstall; a mirror that lacks the package
+can never produce a working plugin.
 
 ## Usage
 
@@ -71,7 +77,7 @@ uninstall, and upgrading from v1 live in the
 ├── packages/dsh-labview-mcp/   the plugin: Host half, browser half, Fetch routes, locales, tests
 │   ├── docs/                   design detail, migration notes, preview image
 │   └── test/                   node --test suites
-├── scripts/                    release and binary-package builders (maintainers)
+├── scripts/                    release and binary-package builders, fresh-install check (maintainers)
 ├── docs/
 │   ├── adr/                    architecture decision records
 │   └── agents/                 how this repository is worked on
@@ -82,7 +88,7 @@ uninstall, and upgrading from v1 live in the
 
 ```bash
 pnpm install     # pnpm 11
-pnpm test        # node --test — 83 tests
+pnpm test        # node --test — 88 tests
 ```
 
 ## Documentation

@@ -43,6 +43,8 @@ function routesFor(service, overrides = {}) {
   return createStatusRoutes({
     service,
     binaryPackageRoot: 'C:\\profile\\node_modules\\dsh-labview-mcp-win32-x64',
+    binaryPackageName: 'dsh-labview-mcp-win32-x64',
+    binaryPackageRange: '~3.1.0',
     toolsRoot: 'C:\\Users\\PC\\.dsh\\tools\\labview-mcp',
     now: () => 0,
     ...overrides,
@@ -87,6 +89,8 @@ test('GET reports the runtime status, the binary package, and the tools director
   assert.deepEqual(body.binaryPackage, {
     installed: true,
     root: 'C:\\profile\\node_modules\\dsh-labview-mcp-win32-x64',
+    name: 'dsh-labview-mcp-win32-x64',
+    range: '~3.1.0',
   })
   assert.equal(body.toolsRoot, 'C:\\Users\\PC\\.dsh\\tools\\labview-mcp')
   assert.equal(body.repairing, false)
@@ -94,10 +98,15 @@ test('GET reports the runtime status, the binary package, and the tools director
   assert.equal(body.checkedAt, '1970-01-01T00:00:00.000Z')
 })
 
-test('a missing binary package is reported instead of guessed', async () => {
+test('a missing binary package reports the required package and range', async () => {
   const { body } = await readStatus(routesFor(stubService().service, { binaryPackageRoot: null })[0])
 
-  assert.deepEqual(body.binaryPackage, { installed: false, root: null })
+  assert.deepEqual(body.binaryPackage, {
+    installed: false,
+    root: null,
+    name: 'dsh-labview-mcp-win32-x64',
+    range: '~3.1.0',
+  })
 })
 
 test('a failing status() still answers 200 with a broken state', async () => {
