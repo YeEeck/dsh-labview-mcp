@@ -157,6 +157,12 @@ packages:
   slip through. Hold the public announcement until the plugin version is at
   least 24 hours old, so pnpm's default `minimumReleaseAge` of 1440 minutes does
   not make the first-day install fail.
+- Plugin-only fix (no new upstream release): `scripts/release.mjs --publish plugin`
+  always targets the latest upstream release, so it refuses when that binary version
+  is not on npm. Publish such a fix directly with `npm publish` from
+  `packages/dsh-labview-mcp` once the runtime version in its range is 24 hours old
+  and both registries serve it, then run the fresh-profile check below for the new
+  plugin version. (1.1.0 was published this way against `dsh-labview-mcp-win32-x64@3.1.0`.)
 - Fresh-profile install check: `node scripts/verify-install.mjs --version <v>`
   installs the published plugin into a throwaway profile from npmjs and npmmirror
   and fails when the runtime package does not arrive. Run it after each publish,
