@@ -536,12 +536,29 @@ function selectPublishReport(parsed, packageName) {
 }
 
 /** Run `npm publish --dry-run --json` and return its file list. */
+/**
+ * Read the file list npm would publish. `npm publish --dry-run` still asks the
+ * registry and refuses a version that is already published, which is exactly
+ * the binary package during a later plugin release; in that case the same list
+ * comes from `npm pack --dry-run --json`, which never contacts the registry.
+ */
 async function runPublishDryRun(packageDirectory, packageName) {
-  const parsed = await runNpmJson(['publish', '--dry-run', '--json'], {
-    cwd: packageDirectory,
-    label: 'npm publish --dry-run',
-  })
-  return selectPublishReport(parsed, packageName)
+  try {
+    const parsed = await runNpmJson(['publish', '--dry-run', '--json'], {
+      cwd: packageDirectory,
+      label: 'npm publish --dry-run',
+    })
+    return selectPublishReport(parsed, packageName)
+  } catch (error) {
+    if (!/previously published|EPUBLISHCONFLICT|cannot publish over/i.test(errorMessage(error))) {
+      throw error
+    }
+    const parsed = await runNpmJson(['pack', '--dry-run', '--json'], {
+      cwd: packageDirectory,
+      label: 'npm pack --dry-run',
+    })
+    return { ...selectPublishReport(parsed, packageName), dryRunSkipped: 'already-published' }
+  }
 }
 
 /** Normalise a tarball or publish-report path to package-relative form. */
@@ -694,6 +711,7 @@ function summarizePublishReport(report) {
     unpackedSize: report.unpackedSize,
     entryCount: report.entryCount,
     files: report.files,
+    ...(report.dryRunSkipped ? { dryRunSkipped: report.dryRunSkipped } : {}),
   }
 }
 
