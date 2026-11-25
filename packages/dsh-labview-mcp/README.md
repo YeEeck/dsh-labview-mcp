@@ -8,7 +8,7 @@ endorsed by NI or Zuehlke.
 
 ## What you get
 
-- **122 LabVIEW MCP tools** in every new session, named `mcp__labview__*`.
+- **123 LabVIEW MCP tools** in every new session, named `mcp__labview__*`.
 - **Two native diagnostics**: `labview_mcp_status` and `labview_mcp_repair`.
 - **Runtime status in Plugins**: the plugin's own page shows the live state and
   can repair it without leaving the UI.
@@ -27,7 +27,7 @@ endorsed by NI or Zuehlke.
   service (`lvai.LVAI`) to be available.
 - **Cost**: adding the plugin downloads the ~57 MB platform package
   `dsh-labview-mcp-win32-x64`; first use copies about 178 MB of runtime files to
-  the tools directory in the background. The 122 tools cost roughly
+  the tools directory in the background. The 123 tools cost roughly
   **65–75k tokens per request**, because every tool definition is sent to the
   model.
 
@@ -44,7 +44,7 @@ A new session then sees the `mcp__labview__*` tools.
 
 A package mirror (npmmirror is DSH's default fallback in China) can lag behind
 npm for the 57 MB runtime package. When that happens, pnpm cannot resolve
-`dsh-labview-mcp-win32-x64@3.1.0` and the installation fails; it no longer
+`dsh-labview-mcp-win32-x64@3.1.9` and the installation fails; it no longer
 installs a plugin that later reports a missing runtime. Install again with
 `registry.npmjs.org` as the registry, or wait until the mirror serves the
 package and reinstall.
@@ -107,7 +107,7 @@ look when `mcp__labview__*` tools are absent or failing. The plugin's page in
 |---|---|---|
 | `missing` | The `dsh-labview-mcp-win32-x64` package cannot be resolved, or the runtime has not been provisioned yet. A profile installed before 1.1.0 can be in this state even though the plugin itself installed. | Wait if provisioning is in progress; otherwise reinstall the plugin from a registry that has the runtime package. `labview_mcp_repair` cannot install an npm package. |
 | `provisioning` | The runtime is being copied in the background. | Wait; then call `labview_mcp_status` again. |
-| `ready` | The runtime exists and the server connection is healthy. | No action. `toolCount` should be 122. |
+| `ready` | The runtime exists and the server connection is healthy. | No action. `toolCount` should be 123. |
 | `broken` | The runtime is incomplete, corrupt, or the MCP server failed/closed. | Run `labview_mcp_repair`; use `force: true` if the runtime looks intact but is corrupt. |
 | `conflict` | Another `labview` MCP server is already configured or registered (for example the old v1 bundle). | Remove that server, then run `labview_mcp_repair`. |
 | `unsupported` | The platform is not Windows x64. | Use a Windows x64 machine; there is no binary package for this platform. |
@@ -140,7 +140,7 @@ The repository ships one maintainer script, `scripts/release.mjs`, for both npm
 packages:
 
 - The binary package `dsh-labview-mcp-win32-x64` has the **upstream release
-  version** (currently `3.1.0`). The plugin package `dsh-labview-mcp` has its
+  version** (currently `3.1.9`). The plugin package `dsh-labview-mcp` has its
   **own independent version** (currently `1.1.0`) and declares the binary
   package as `dependencies: { "dsh-labview-mcp-win32-x64": "~3.1.0" }`.
   An upstream minor or major release needs a plugin version bump; patch

@@ -17,7 +17,7 @@ tools — no manual MCP setup, no profile editing, no build step.
 
 ## Highlights
 
-- **122 `mcp__labview__*` tools** in every new session, served by the bundled
+- **123 `mcp__labview__*` tools** in every new session, served by the bundled
   LabVIEW MCP runtime.
 - **Two native diagnostics.** `labview_mcp_status` is a read-only health report;
   `labview_mcp_repair` re-runs provisioning in place.
@@ -41,7 +41,7 @@ tools — no manual MCP setup, no profile editing, no build step.
 | **Windows x64** | Required. The runtime package is a required dependency, so installation is refused on other platforms. |
 | **LabVIEW** | Optional — see above. |
 | **Disk** | ~57 MB for the `dsh-labview-mcp-win32-x64` package, plus ~178 MB of provisioned runtime. |
-| **Tokens** | 65–75k per request: all 122 tool definitions are sent to the model. Disable the plugin when you are not using it. |
+| **Tokens** | 65–75k per request: all 123 tool definitions are sent to the model. Disable the plugin when you are not using it. |
 
 ## Installation
 
@@ -54,7 +54,7 @@ provisions the runtime in the background, then registers the `labview` MCP serve
 new sessions then see the `mcp__labview__*` tools. The first launch of the unsigned
 `LabVIEWMCP.exe` can be slow while Windows scans it — the plugin allows 120 seconds.
 
-If the install fails because the registry cannot resolve `dsh-labview-mcp-win32-x64@3.1.0`,
+If the install fails because the registry cannot resolve `dsh-labview-mcp-win32-x64@3.1.9`,
 the registry is a mirror that has not synced the 57 MB package yet. Install again with
 `registry.npmjs.org`, or wait for the mirror and reinstall; a mirror that lacks the package
 can never produce a working plugin.

@@ -57,12 +57,12 @@ export const DEFAULT_OUT_DIRECTORY = path.join(
 export const DEFAULT_PACK_DESTINATION = path.join(REPOSITORY_ROOT, 'dist')
 
 /**
- * The upstream v3.1.0 release contains 5,582 files (including the 65 Python
+ * The upstream v3.1.9 release contains 5,583 files (including the 65 Python
  * bytecode files that upstream deliberately ships in `__pycache__`). The
  * release script for a future upstream tag passes that tag's own manifest
- * count; this default makes the documented v3.1.0 build fail on any drift.
+ * count; this default makes the documented v3.1.9 build fail on any drift.
  */
-export const DEFAULT_EXPECTED_RUNTIME_FILE_COUNT = 5582
+export const DEFAULT_EXPECTED_RUNTIME_FILE_COUNT = 5583
 
 const PACKAGE_NAME = 'dsh-labview-mcp-win32-x64'
 const PACKAGE_DESCRIPTION =
